@@ -127,6 +127,24 @@ case `uname` in
       installmansuffix=share/man
     fi
     ;;
+  MINGW32_NT-*)
+      m32=i3mw
+      m64=a6mw
+      tm32=ti3mw
+      tm64=ta6mw
+      installprefix=/usr/local
+      installmansuffix=share/man
+    ;;
+
+  MINGW64_NT-*)
+      m32=i3mw
+      m64=a6mw
+      tm32=ti3mw
+      tm64=ta6mw
+      installprefix=/usr/local
+      installmansuffix=share/man
+    ;;
+
 esac
 
 threads=""

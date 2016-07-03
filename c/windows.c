@@ -65,7 +65,7 @@ char *S_ntdlerror(void) {
 #ifdef FLUSHCACHE
 oops, no S_flushcache_max_gap or S_doflush
 #endif /* FLUSHCACHE */
-
+#ifndef __GNUC__
 static int strncasecmp(const char *s1, const char *s2, int n) {
   while (n > 0) {
     char c1 = *s1; char c2 = *s2;
@@ -81,6 +81,7 @@ static int strncasecmp(const char *s1, const char *s2, int n) {
   }
   return 0;
 }
+#endif
 
 static void SplitRegistryKey(char *who, char *wholekey, HKEY *key, char **subkey, char **last) {
   char c, *s;

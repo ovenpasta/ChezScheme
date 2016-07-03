@@ -114,6 +114,53 @@ typedef int tputsputcchar;
 #define UNUSED __attribute__((__unused__))
 #endif
 
+#if (machine_type == machine_type_i3mw || machine_type == machine_type_ti3mw || machine_type == machine_type_a6mw || machine_type == machine_type_ta6mw)
+#if (machine_type == machine_type_ti3mw || machine_type == machine_type_ta6mw)
+#define PTHREADS
+#endif
+#define NOBLOCK O_NONBLOCK
+#define LOAD_SHARED_OBJECT
+/*#define USE_MMAP
+  #define MMAP_HEAP*/
+#define USE_VIRTUAL_ALLOC
+#define IEEE_DOUBLE
+#define LITTLE_ENDIAN_IEEE_DOUBLE
+#define LDEXP
+#define ARCHYPERBOLIC
+#define GETPAGESIZE() S_getpagesize()
+typedef char *memcpy_t;
+#define MAKE_NAN(x) { x = 0.0; x = x / x; }
+#define GETWD(x) getcwd((x),PATH_MAX)
+typedef int tputsputcchar;
+/*#define LOCKF*/
+#define DIRMARKERP(c) ((c) == '/' || (c) == '\\')
+#define LSEEK lseek64
+#define LSTAT stat
+#define OFF_T off64_t
+#define _LARGEFILE64_SOURCE
+#define SECATIME(sb) (sb).st_atime
+#define SECCTIME(sb) (sb).st_ctime
+#define SECMTIME(sb) (sb).st_mtime
+#define NSECATIME(sb) 0
+#define NSECCTIME(sb) 0
+#define NSECMTIME(sb) 0
+
+#define ICONV_INBUF_TYPE char **
+#define UNUSED __attribute__((__unused__))
+
+#include <wchar.h>
+#define STATBUF stat
+#define USE_NO_MINGW_SETJMP_TWO_ARGS
+#define _longjmp longjmp
+#define FLOCK S_windows_flock
+#define LOCK_SH 1
+#define LOCK_EX 2
+#define LOCK_NB 4
+#define LOCK_UN 8
+
+#endif
+
+
 #if (machine_type == machine_type_i3fb || machine_type == machine_type_ti3fb || machine_type == machine_type_a6fb || machine_type == machine_type_ta6fb)
 #if (machine_type == machine_type_ti3fb || machine_type == machine_type_ta6fb)
 #define PTHREADS

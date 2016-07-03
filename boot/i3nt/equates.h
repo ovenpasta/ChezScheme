@@ -270,7 +270,7 @@ typedef unsigned __int64 U64;
 #define machine_type_a6ob 0xF
 #define machine_type_a6osx 0xD
 #define machine_type_a6s2 0x11
-#define machine_type_alist ((0 . any) (1 . i3le) (2 . ti3le) (3 . i3nt) (4 . ti3nt) (5 . i3fb) (6 . ti3fb) (7 . i3ob) (8 . ti3ob) (9 . i3osx) (10 . ti3osx) (11 . a6le) (12 . ta6le) (13 . a6osx) (14 . ta6osx) (15 . a6ob) (16 . ta6ob) (17 . a6s2) (18 . ta6s2) (19 . i3s2) (20 . ti3s2) (21 . a6fb) (22 . ta6fb) (23 . i3nb) (24 . ti3nb) (25 . a6nb) (26 . ta6nb) (27 . a6nt) (28 . ta6nt) (29 . i3qnx) (30 . ti3qnx) (31 . arm32le) (32 . tarm32le) (33 . ppc32le) (34 . tppc32le))
+#define machine_type_alist ((0 . any) (1 . i3le) (2 . ti3le) (3 . i3nt) (4 . ti3nt) (5 . i3fb) (6 . ti3fb) (7 . i3ob) (8 . ti3ob) (9 . i3osx) (10 . ti3osx) (11 . a6le) (12 . ta6le) (13 . a6osx) (14 . ta6osx) (15 . a6ob) (16 . ta6ob) (17 . a6s2) (18 . ta6s2) (19 . i3s2) (20 . ti3s2) (21 . a6fb) (22 . ta6fb) (23 . i3nb) (24 . ti3nb) (25 . a6nb) (26 . ta6nb) (27 . a6nt) (28 . ta6nt) (29 . i3qnx) (30 . ti3qnx) (31 . arm32le) (32 . tarm32le) (33 . ppc32le) (34 . tppc32le) (35 . i3mw) (36 . ti3mw)) 
 #define machine_type_any 0x0
 #define machine_type_arm32le 0x1F
 #define machine_type_i3fb 0x5
@@ -832,7 +832,7 @@ typedef unsigned __int64 U64;
 #define RPHEADERTOPLINK(x) (*((uptr *)((uptr)(x)+4)))
 
 /* machine types */
-#define machine_type_names {"any", "i3le", "ti3le", "i3nt", "ti3nt", "i3fb", "ti3fb", "i3ob", "ti3ob", "i3osx", "ti3osx", "a6le", "ta6le", "a6osx", "ta6osx", "a6ob", "ta6ob", "a6s2", "ta6s2", "i3s2", "ti3s2", "a6fb", "ta6fb", "i3nb", "ti3nb", "a6nb", "ta6nb", "a6nt", "ta6nt", "i3qnx", "ti3qnx", "arm32le", "tarm32le", "ppc32le", "tppc32le"}
+#define machine_type_names {"any", "i3le", "ti3le", "i3nt", "ti3nt", "i3fb", "ti3fb", "i3ob", "ti3ob", "i3osx", "ti3osx", "a6le", "ta6le", "a6osx", "ta6osx", "a6ob", "ta6ob", "a6s2", "ta6s2", "i3s2", "ti3s2", "a6fb", "ta6fb", "i3nb", "ti3nb", "a6nb", "ta6nb", "a6nt", "ta6nt", "i3qnx", "ti3qnx", "arm32le", "tarm32le", "ppc32le", "tppc32le","i3mw","ti3mw"}
 
 /* allocation-space names */
 #define alloc_space_names "new", "impure", "symbol", "port", "weakpr", "pure", "cont", "code", "p-tobj", "ip-rec", "data", "empty"

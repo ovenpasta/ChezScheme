@@ -353,7 +353,9 @@ extern int S_windows_mkdir(const char *pathname);
 extern int S_windows_open(const char *pathname, int flags, int mode);
 extern int S_windows_rename(const char *oldpathname, const char *newpathname);
 extern int S_windows_rmdir(const char *pathname);
+#ifndef __GNUC__
 extern int S_windows_stat64(const char *pathname, struct STATBUF *buffer);
+#endif
 extern int S_windows_system(const char *command);
 extern int S_windows_unlink(const char *pathname);
 extern char *S_windows_getcwd(char *buffer, int maxlen);

@@ -15,8 +15,13 @@
  */
 
 #ifdef WIN32
+#ifdef __GNUC__
+#undef FORCEINLINE
+#define FORCEINLINE static inline
+#else
 #undef FORCEINLINE
 #define FORCEINLINE static __forceinline
+#endif
 #else
 #define FORCEINLINE static inline
 #endif

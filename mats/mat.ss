@@ -406,7 +406,7 @@
         (collect-maximum-generation (+ (random 254) 1))))))
 
 (define windows?
-  (if (memq (machine-type) '(i3nt ti3nt a6nt ta6nt))
+  (if (memq (machine-type) '(i3nt ti3nt a6nt ta6nt i3mw ti3mw a6mw ta6mw))
       (lambda () #t)
       (lambda () #f)))
 
