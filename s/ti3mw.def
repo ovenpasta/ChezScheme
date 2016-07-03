@@ -47,4 +47,4 @@
 (define-constant integer-divide-instruction #t)
 (define-constant software-floating-point #f)
 (define-constant segment-table-levels 1)
-(features iconv expeditor pthreads)
+(features iconv expeditor pthreads windows mingw)
