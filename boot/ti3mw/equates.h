@@ -348,8 +348,8 @@ typedef unsigned long long U64;
 #define mask_tlc 0xFFFFFFFF
 #define mask_typed_object 0x7
 #define mask_unbound 0xFFFFFFFF
-#define max_float_alignment 0x4
-#define max_integer_alignment 0x4
+#define max_float_alignment 0x8
+#define max_integer_alignment 0x8
 #define max_real_space 0xA
 #define max_space 0xB
 #define max_sweep_space 0x9
@@ -443,8 +443,8 @@ typedef unsigned long long U64;
 #define rp_header_livemask_disp 0x0
 #define rp_header_mv_return_address_disp 0xC
 #define rp_header_toplink_disp 0x4
-#define rtd_counts_data_disp 0xD
-#define rtd_counts_timestamp_disp 0x5
+#define rtd_counts_data_disp 0x11
+#define rtd_counts_timestamp_disp 0x9
 #define rtd_counts_type_disp 0x1
 #define rtd_generative 0x1
 #define rtd_opaque 0x2
@@ -475,7 +475,7 @@ typedef unsigned long long U64;
 #define size_rp_header 0x10
 #define size_rtd_counts 0x410
 #define size_symbol 0x18
-#define size_tc 0x120
+#define size_tc 0x128
 #define size_thread 0x8
 #define size_tlc 0x10
 #define size_typed_object 0x8
@@ -524,7 +524,7 @@ typedef unsigned long long U64;
 #define tc_ac0_disp 0x4
 #define tc_ac1_disp 0x8
 #define tc_active_disp 0x8C
-#define tc_alloc_counter_disp 0x114
+#define tc_alloc_counter_disp 0x118
 #define tc_ap_disp 0x18
 #define tc_arg_regs_disp 0x0
 #define tc_block_counter_disp 0xDC
@@ -543,11 +543,11 @@ typedef unsigned long long U64;
 #define tc_generate_inspector_information_disp 0xF8
 #define tc_generate_profile_forms_disp 0xFC
 #define tc_guardian_entries_disp 0x7C
-#define tc_instr_counter_disp 0x10C
+#define tc_instr_counter_disp 0x110
 #define tc_keyboard_interrupt_pending_disp 0xC8
 #define tc_meta_level_disp 0xF0
 #define tc_optimize_level_disp 0x100
-#define tc_parameters_disp 0x11C
+#define tc_parameters_disp 0x120
 #define tc_random_seed_disp 0x88
 #define tc_real_eap_disp 0x38
 #define tc_ret_disp 0x20
@@ -578,7 +578,7 @@ typedef unsigned long long U64;
 #define time_duration 0x2
 #define time_monotonic 0x3
 #define time_process 0x0
-#define time_t_bits 0x20
+#define time_t_bits 0x40
 #define time_thread 0x1
 #define time_utc 0x4
 #define timer_interrupt_index 0x2
@@ -646,7 +646,7 @@ typedef unsigned long long U64;
 #define vector_type_disp 0x1
 #define virtual_register_count 0x10
 #define visit_tag 0x0
-#define wchar_bits 0x20
+#define wchar_bits 0x10
 
 /* constants from declare-c-entries */
 #define CENTRY_Scall_bytevector 22
@@ -795,8 +795,8 @@ typedef unsigned long long U64;
 #define CONTRET(x) (*((ptr *)((uptr)(x)+23)))
 #define CONTWINDERS(x) (*((ptr *)((uptr)(x)+27)))
 #define RTDCOUNTSTYPE(x) (*((iptr *)((uptr)(x)+1)))
-#define RTDCOUNTSTIMESTAMP(x) (*((U64 *)((uptr)(x)+5)))
-#define RTDCOUNTSIT(x,i) (((uptr *)((uptr)(x)+13))[i])
+#define RTDCOUNTSTIMESTAMP(x) (*((U64 *)((uptr)(x)+9)))
+#define RTDCOUNTSIT(x,i) (((uptr *)((uptr)(x)+17))[i])
 #define RECORDDESCPARENT(x) (*((ptr *)((uptr)(x)+5)))
 #define RECORDDESCSIZE(x) (*((ptr *)((uptr)(x)+9)))
 #define RECORDDESCPM(x) (*((ptr *)((uptr)(x)+13)))
@@ -855,7 +855,7 @@ typedef unsigned long long U64;
 #define AC0(x) (*((void* *)((uptr)(x)+4)))
 #define AC1(x) (*((void* *)((uptr)(x)+8)))
 #define ACTIVE(x) (*((I32 *)((uptr)(x)+140)))
-#define ALLOCCOUNTER(x) (*((U64 *)((uptr)(x)+276)))
+#define ALLOCCOUNTER(x) (*((U64 *)((uptr)(x)+280)))
 #define AP(x) (*((void* *)((uptr)(x)+24)))
 #define ARGREGS(x,i) (((void* *)((uptr)(x)+0))[i])
 #define BLOCKCOUNTER(x) (*((ptr *)((uptr)(x)+220)))
@@ -874,11 +874,11 @@ typedef unsigned long long U64;
 #define GENERATEINSPECTORINFORMATION(x) (*((ptr *)((uptr)(x)+248)))
 #define GENERATEPROFILEFORMS(x) (*((ptr *)((uptr)(x)+252)))
 #define GUARDIANENTRIES(x) (*((ptr *)((uptr)(x)+124)))
-#define INSTRCOUNTER(x) (*((U64 *)((uptr)(x)+268)))
+#define INSTRCOUNTER(x) (*((U64 *)((uptr)(x)+272)))
 #define KEYBOARDINTERRUPTPENDING(x) (*((ptr *)((uptr)(x)+200)))
 #define METALEVEL(x) (*((ptr *)((uptr)(x)+240)))
 #define OPTIMIZELEVEL(x) (*((ptr *)((uptr)(x)+256)))
-#define PARAMETERS(x) (*((ptr *)((uptr)(x)+284)))
+#define PARAMETERS(x) (*((ptr *)((uptr)(x)+288)))
 #define RANDOMSEED(x) (*((U32 *)((uptr)(x)+136)))
 #define REAL_EAP(x) (*((void* *)((uptr)(x)+56)))
 #define RET(x) (*((void* *)((uptr)(x)+32)))
