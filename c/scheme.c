@@ -995,6 +995,19 @@ extern void Sregister_boot_file(name) const char *name; {
   find_boot(name, "", 1);
 }
 
+extern void Sregister_boot_file_from_memory(mem,size)
+     const unsigned char* mem;
+     unsigned long size;
+{
+  gzFile file;
+  
+  file=gzmemopen(mem,size,"rb");
+  
+  bd[boot_count].file = file;
+  strcpy(bd[boot_count].path, "*memory*");
+  boot_count += 1;
+}
+
 extern void Sregister_heap_file(UNUSED const char *path) {
   fprintf(stderr, "Sregister_heap_file: saved heap files are not presently supported\n");
   S_abnormal_exit();

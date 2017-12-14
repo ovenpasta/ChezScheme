@@ -1,0 +1,99 @@
+#!/usr/bin/env scheme-script
+;;
+;; Copyright 2017 Aldo Nicolas Bruno
+;;
+;; Licensed under the Apache License, Version 2.0 (the "License");
+;; you may not use this file except in compliance with the License.
+;; You may obtain a copy of the License at
+;;
+;;     http://www.apache.org/licenses/LICENSE-2.0
+;;
+;; Unless required by applicable law or agreed to in writing, software
+;; distributed under the License is distributed on an "AS IS" BASIS,
+;; WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+;; See the License for the specific language governing permissions and
+;; limitations under the License.
+
+;; This program needs some changes to files in /zlib/ files, /c/scheme.c and
+;; s/mkheader.ss,
+;; Notably there where made changes to zlib to allow loading gzip streams
+;; from memory directly. These changes are part of this source tree.
+;;
+;; USAGE: scheme-static {ChezScheme source dir} {source file} [machine-type]
+;;
+;; Notice that you omit the .ss extension of the source file.
+;; If you omit machine-type then (machine-type) will be evaluated instead
+;;
+;; example: $ ./scheme-static /home/user/ChezScheme static-hello a6le
+;;          $ ./static-hello
+;;          $ Hello World!
+
+(import (chezscheme))
+
+(define (reswrap name type x p)
+  (fprintf p "const ~d ~d[] = {" type name)
+  (do ([i 0 (+ i 1)])
+      ((>= i (bytevector-length x)))
+    (when (zero? (mod i 16))
+      (put-string p "\n  "))
+    (put-string p "0x")
+    (put-string p (number->string (bytevector-u8-ref x i) 16))
+    (unless (= i (- 1 (bytevector-length x)))
+      (put-string p ",")))
+  (put-string p "};\n"))
+
+(define (load-bytevector path)
+  (call-with-port (open-file-input-port path)
+		  (lambda (p) (get-bytevector-all p))))
+
+(define source-file (cadr (command-line-arguments)))
+
+(define (ext x e)
+  (string-append x e))
+
+(define chez-source-dir (car (command-line-arguments)))
+
+(define machine (if (null? (cddr (command-line-arguments)))
+		    (machine-type)
+		    (caddr (command-line-arguments))))
+
+(define chez-prefix (format #f  "~d/~d/boot/~d/"
+			    chez-source-dir machine machine))
+
+(compile-file source-file)
+
+(make-boot-file (ext source-file ".boot")
+		'()
+		(string-append chez-prefix "petite.boot")
+		(ext source-file ".so"))
+
+(with-output-to-file
+    (ext source-file ".c")
+    (lambda ()
+      (reswrap  "static_boot"
+		"unsigned char"
+		(load-bytevector (ext source-file ".boot"))
+		(current-output-port))
+      (display "
+#include \"scheme.h\"
+
+int main(int argc,const char*argv[])
+{
+  Sscheme_init(0);
+  Sregister_boot_file_from_memory(static_boot,sizeof static_boot);
+  Sbuild_heap(argv[0],0);
+#define CALL1(who, arg) Scall1(Stop_level_value(Sstring_to_symbol(who)), arg)
+  CALL1(\"suppress-greeting\",Strue);
+  Sscheme_start(argc,argv);
+  Sscheme_deinit();
+}
+"))
+  'truncate)
+
+
+(let ([cmd (format #f "cc -o ~d ~d.c -lm -ldl -lc -ltinfo -lncurses ~d -I~d ~d/kernel.o"
+		   source-file source-file
+		   (if (threaded?) "-lpthread" "")
+		   chez-prefix chez-prefix)])
+  (display cmd) (newline)
+  (system cmd))
