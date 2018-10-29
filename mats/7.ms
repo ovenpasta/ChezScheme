@@ -1,5 +1,5 @@
 ;;; 7.ms
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -111,6 +111,14 @@
     (with-output-to-string (lambda () (load "testfile.so")))
     "6\n")
  )
+
+(mat load-compiled-from-port
+  (begin
+    (define-values (o get) (open-bytevector-output-port))
+    (compile-to-port '((define lcfp1 'worked) 'loaded) o)
+    (eq? 'loaded (load-compiled-from-port (open-bytevector-input-port (get)))))
+  (eq? 'worked lcfp1)
+)
 
 (mat compile-to-file
   (begin
@@ -834,6 +842,47 @@
   (begin
     (rm-rf "testdir")
     #t)
+  ; make sure maybe-compile-file handles incomplete fasl files
+  (begin
+    (mkfile "testfile-mc-2a.ss"
+      '(library (testfile-mc-2a)
+         (export q)
+         (import (chezscheme))
+         (define f
+           (lambda ()
+             (printf "running f\n")
+             "x"))
+         (define-syntax q
+           (begin
+             (printf "expanding testfile-mc-2a\n")
+             (lambda (x)
+               (printf "expanding q\n")
+               #'(f))))))
+    (mkfile "testfile-mc-2.ss"
+      '(import (chezscheme) (testfile-mc-2a))
+      '(define-syntax qq
+         (begin
+           (printf "expanding testfile-mc-2\n")
+           (lambda (x)
+             (printf "expanding qq\n")
+             #'q)))
+      '(printf "qq => ~a\n" qq))
+    (delete-file "testfile-mc-2a.so")
+    (delete-file "testfile-mc-2.so")
+    (display-string (separate-compile '(lambda (x) (parameterize ([compile-file-message #f] [compile-imported-libraries #t] [compile-compressed #f]) (maybe-compile-program x))) 'mc-2))
+    #t)
+  (begin
+    (let ([p (open-file-input/output-port "testfile-mc-2a.so" (file-options no-create no-fail no-truncate))])
+      (set-port-length! p 73)
+      (close-port p))
+    (display-string (separate-compile '(lambda (x) (parameterize ([compile-file-message #f] [compile-imported-libraries #t] [compile-compressed #f] [import-notify #t]) (maybe-compile-program x))) 'mc-2))
+    #t)
+  (begin
+    (let ([p (open-file-input/output-port "testfile-mc-2.so" (file-options no-create no-fail no-truncate))])
+      (set-port-length! p 87)
+      (close-port p))
+    (display-string (separate-compile '(lambda (x) (parameterize ([compile-file-message #f] [compile-imported-libraries #t] [compile-compressed #f] [import-notify #t]) (maybe-compile-program x))) 'mc-2))
+    #t)
  )
 
 (mat make-boot-file
@@ -876,10 +925,7 @@
           "testfile-5.ss"))
       (let-values ([(to-stdin from-stdout from-stderr pid)
                     (open-process-ports
-                      (format "~a -b testfile.boot -q"
-                        (if (windows?)
-                            (list->string (subst #\\ #\/ (string->list *scheme*)))
-                            *scheme*))
+                      (format "~a -b testfile.boot -q" (patch-exec-path *scheme*))
                       (buffer-mode block)
                       (native-transcoder))])
         (close-output-port to-stdin)
@@ -892,9 +938,31 @@
     "hello 1\nhello 2\nhello 3\nhello 4\nhello 5\n")
   (equal?
     (begin
-      (unless (or (embedded?) (equal? *scheme* (format "../bin/~a/scheme" (machine-type))))
-        (errorf #f "not testing boot file based on ../boot/~a/petite.boot, since *scheme* isn't ../bin/~a/scheme"
-          (machine-type) (machine-type)))
+      (parameterize ([optimize-level 2])
+        (compile-to-file
+         '((library (A) (export a) (import (scheme)) (define a 'aye))
+           (library (B) (export b) (import (A) (scheme)) (define b (list a 'captain))))
+         "testfile-libs.so")
+        (make-boot-file "testfile.boot" '("petite") "testfile-libs.so"))
+      (let-values ([(to-stdin from-stdout from-stderr pid)
+                    (open-process-ports
+                      (format "~a -b testfile.boot -q" (patch-exec-path *scheme*))
+                      (buffer-mode block)
+                      (native-transcoder))])
+        (pretty-print '(let () (import (B)) (printf "~s\n" b)) to-stdin)
+        (close-output-port to-stdin)
+        (let ([out (get-string-all from-stdout)]
+              [err (get-string-all from-stderr)])
+          (close-input-port from-stdout)
+          (close-input-port from-stderr)
+          (unless (eof-object? err) (error 'bootfile-test1 err))
+          out)))
+    "(aye captain)\n")
+  (equal?
+    (begin
+      (unless (or (embedded?) (equal? *scheme* (format "../bin/~a/scheme~a" (machine-type) (if (windows?) ".exe" ""))))
+        (errorf #f "not testing boot file based on ../boot/~a/petite.boot, since *scheme* isn't ../bin/~a/scheme~a"
+          (machine-type) (machine-type) (if (windows?) ".exe" "")))
       (parameterize ([optimize-level 2])
         (make-boot-file "testfile.boot" '()
           (format "../boot/~a/petite.boot" (machine-type))
@@ -905,10 +973,7 @@
           "testfile-5.so"))
       (let-values ([(to-stdin from-stdout from-stderr pid)
                     (open-process-ports
-                      (format "~a -b testfile.boot -q"
-                        (if (windows?)
-                            (list->string (subst #\\ #\/ (string->list *scheme*)))
-                            *scheme*))
+                      (format "~a -b testfile.boot -q" (patch-exec-path *scheme*))
                       (buffer-mode block)
                       (native-transcoder))])
         (close-output-port to-stdin)
@@ -1557,6 +1622,13 @@ evaluating module init
       "testfile-wpo-prog")
     "()\n")
 
+  (equal?
+    (separate-compile
+      '(lambda (x)
+         (compile-whole-program (format "~a.wpo" x) (format "~a-none.so" x) #f))
+      "testfile-wpo-prog")
+    "()\n")
+
   (delete-file "testfile-wpo-lib.ss")
   (delete-file "testfile-wpo-lib.so")
   (delete-file "testfile-wpo-lib.wpo")
@@ -1564,6 +1636,9 @@ evaluating module init
   (equal?
     (separate-eval '(load-program "testfile-wpo-prog-all.so"))
     "3628800\n3628800\n")
+
+  (error?
+    (separate-eval '(load-program "testfile-wpo-prog-none.so")))
 
   (begin
     (with-output-to-file "testfile-wpo-a3.ss"
@@ -3123,6 +3198,197 @@ evaluating module init
     "(9 . 5)\n")
 )
 
+(mat library-manager
+  (begin
+    (with-output-to-file "testfile-lm-a.ss"
+      (lambda ()
+        (pretty-print
+         '(library (testfile-lm-a)
+            (export ct-a rt-a)
+            (import (scheme))
+            (meta define ct-a (begin (display "ct-a rhs\n") 123))
+            (define rt-a (begin (display "rt-a rhs\n") 456)))))
+      'replace)
+    (with-output-to-file "testfile-lm-b.ss"
+      (lambda ()
+        (pretty-print
+         '(library (testfile-lm-b)
+            (export b)
+            (import (scheme) (testfile-lm-a))
+            (define-syntax (use-ct-val x) (if (odd? ct-a) #'"odd" #'"even"))
+            (define b use-ct-val))))
+      'replace)
+    (with-output-to-file "testfile-lm-c.ss"
+      (lambda ()
+        (pretty-print
+         '(library (testfile-lm-c)
+            (export c)
+            (import (scheme) (testfile-lm-a))
+            (define use-rt-val rt-a)
+            (define c use-rt-val))))
+      'replace)
+    (with-output-to-file "testfile-lm-combined.ss"
+      (lambda ()
+        (pretty-print
+         '(begin
+            (include "testfile-lm-a.ss")
+            (include "testfile-lm-b.ss")
+            (include "testfile-lm-c.ss"))))
+      'replace)
+    (with-output-to-file "testfile-lm-use-b.ss"
+      (lambda ()
+        (pretty-print
+         '(library (testfile-lm-use-b)
+            (export x)
+            (import (scheme) (testfile-lm-b))
+            (meta define x b))))
+      'replace)
+    (with-output-to-file "testfile-lm-use-c.ss"
+      (lambda ()
+        (pretty-print
+         '(library (testfile-lm-use-c)
+            (export x)
+            (import (scheme) (testfile-lm-c))
+            (define-syntax (x x) c))))
+      'replace)
+    #t)
+  (equal?
+   (separate-eval
+    '(import-notify #t)
+    '(compile-library "testfile-lm-a"))
+   (string-append
+    "compiling testfile-lm-a.ss with output to testfile-lm-a.so\n"
+    "ct-a rhs\n"))
+  (equal?
+   (separate-eval
+    '(import-notify #t)
+    '(library-extensions '((".ss" . ".so")))
+    '(compile-library "testfile-lm-b")
+    '(printf "b = ~s\n" (let () (import (testfile-lm-b)) b)))
+   (string-append
+    "compiling testfile-lm-b.ss with output to testfile-lm-b.so\n"
+    "import: found source file \"testfile-lm-a.ss\"\n"
+    "import: found corresponding object file \"testfile-lm-a.so\"\n"
+    "import: object file is not older\n"
+    "import: loading object file \"testfile-lm-a.so\"\n"
+    "ct-a rhs\n"
+    "b = \"odd\"\n"))
+  (equal?
+   (separate-eval
+    '(import-notify #t)
+    '(library-extensions '((".ss" . ".so")))
+    '(compile-library "testfile-lm-c")
+    '(printf "c = ~s\n" (let () (import (testfile-lm-c)) c)))
+   (string-append
+    "compiling testfile-lm-c.ss with output to testfile-lm-c.so\n"
+    "import: found source file \"testfile-lm-a.ss\"\n"
+    "import: found corresponding object file \"testfile-lm-a.so\"\n"
+    "import: object file is not older\n"
+    "import: loading object file \"testfile-lm-a.so\"\n"
+    "rt-a rhs\n"
+    "c = 456\n"))
+  (equal?
+   ;; library manager revisits object file containing a single library
+   ;; to resolve dependencies after earlier visit
+   (separate-eval
+    '(import-notify #t)
+    '(library-extensions '((".ss" . ".so")))
+    '(visit "testfile-lm-a.so")
+    '(let () (import (testfile-lm-c)) c))
+   (string-append
+    "import: found source file \"testfile-lm-c.ss\"\n"
+    "import: found corresponding object file \"testfile-lm-c.so\"\n"
+    "import: object file is not older\n"
+    "import: loading object file \"testfile-lm-c.so\"\n"
+    "import: attempting to 'revisit' previously 'visited' \"testfile-lm-a.so\" for library (testfile-lm-a) run-time info\n"
+    "rt-a rhs\n"
+    "456\n"))
+  (equal?
+   ;; library manager visits object file containing a single library
+   ;; to resolve dependencies after earlier revisit
+   (separate-eval
+    '(import-notify #t)
+    '(library-extensions '((".ss" . ".so")))
+    '(revisit "testfile-lm-a.so")
+    '(let () (import (testfile-lm-b)) b))
+   (string-append
+    "import: found source file \"testfile-lm-b.ss\"\n"
+    "import: found corresponding object file \"testfile-lm-b.so\"\n"
+    "import: object file is not older\n"
+    "import: loading object file \"testfile-lm-b.so\"\n"
+    "import: attempting to 'visit' previously 'revisited' \"testfile-lm-a.so\" for library (testfile-lm-a) compile-time info\n"
+    "\"odd\"\n"))
+  (equal?
+   (separate-eval
+    '(import-notify #t)
+    '(library-extensions '((".ss" . ".so")))
+    '(compile-file "testfile-lm-combined"))
+   (string-append
+    "compiling testfile-lm-combined.ss with output to testfile-lm-combined.so\n"
+    "ct-a rhs\n"))
+  (equal?
+   ;; library manager revisits object file containing related libraries
+   ;; to resolve dependencies after earlier visit
+   (separate-eval
+    '(import-notify #t)
+    '(visit "testfile-lm-combined.so")
+    '(let ()
+       (import (testfile-lm-a))
+       (define-syntax (foo x) ct-a)
+       (printf "foo = ~s\n" foo))
+    '(let () (import (testfile-lm-c)) c))
+   (string-append
+    "ct-a rhs\n"
+    "foo = 123\n"
+    "import: attempting to 'revisit' previously 'visited' \"testfile-lm-combined.so\" for library (testfile-lm-c) run-time info\n"
+    "rt-a rhs\n"
+    "456\n"))
+  (equal?
+   ;; library manager visits object file containing related libraries
+   ;; to resolve dependencies after earlier revisit
+   (separate-eval
+    '(import-notify #t)
+    '(revisit "testfile-lm-combined.so")
+    '(let ()
+       (import (testfile-lm-a))
+       (define foo rt-a)
+       (printf "foo = ~s\n" foo))
+    '(let () (import (testfile-lm-b)) b))
+   (string-append
+    "import: attempting to 'visit' previously 'revisited' \"testfile-lm-combined.so\" for library (testfile-lm-a) compile-time info\n"
+    "rt-a rhs\n"
+    "foo = 456\n"
+    "\"odd\"\n"))
+  (equal?
+   ;; library manager does not revisit due to earlier load
+   (separate-eval
+    '(import-notify #t)
+    '(load "testfile-lm-combined.so")
+    '(let ()
+       (import (testfile-lm-a))
+       (define-syntax (foo x) ct-a)
+       (printf "foo = ~s\n" foo))
+    '(let () (import (testfile-lm-c)) c))
+   (string-append
+    "ct-a rhs\n"
+    "foo = 123\n"
+    "rt-a rhs\n"
+    "456\n"))
+  (equal?
+   ;; library manager does not revisit due to earlier load
+   (separate-eval
+    '(import-notify #t)
+    '(load "testfile-lm-combined.so")
+    '(let ()
+       (import (testfile-lm-a))
+       (define foo rt-a)
+       (printf "foo = ~s\n" foo))
+    '(let () (import (testfile-lm-b)) b))
+   (string-append
+    "rt-a rhs\n"
+    "foo = 456\n"
+    "\"odd\"\n"))
+  )
 
 
 ;;; section 7.2:
@@ -3262,9 +3528,7 @@ evaluating module init
         'replace)
      ; compile in a separate Scheme process
       (if (windows?)
-          (system (format "echo (compile-file \"testfile\") | ~a"
-                    (list->string
-                      (subst #\\ #\/ (string->list *scheme*)))))
+          (system (format "echo (compile-file \"testfile\") | ~a" (patch-exec-path *scheme*)))
           (system (format "echo '(compile-file \"testfile\")' | ~a" *scheme*)))
       (load "testfile.so")
       (list (top-level-bound? '$notfribblefratz) (top-level-value '$notfribblefratz)))
@@ -3300,6 +3564,25 @@ evaluating module init
              (new-cafe))
            (get))))
      "Huh? \nException: invalid syntax (if)\nHuh? \n")
+   (equal?
+     (separate-eval
+       `(let ([ip (open-string-input-port "
+                    (base-exception-handler
+                      (lambda (c)
+                        (fprintf (console-output-port) \"~%>>> \")
+                        (display-condition c (console-output-port))
+                        (fprintf (console-output-port) \" <<<~%\")
+                        (reset)))
+                    (if)")])
+          (let-values ([(op get) (open-string-output-port)])
+            (parameterize ([console-input-port ip]
+                           [console-output-port op]
+                           [console-error-port op]
+                           [#%$cafe 0]
+                           [waiter-prompt-string "Huh?"])
+              (new-cafe))
+            (get))))
+     "\"Huh? Huh? \\n>>> Exception: invalid syntax (if) <<<\\nHuh? \\n\"\n")
  )
 
 (mat reset
@@ -3336,6 +3619,35 @@ evaluating module init
   (error? ; unexpected return from handler
     (parameterize ([exit-handler values])
       (exit 5)))
+  (begin
+    (define (exit-code expr)
+      (if (windows?)
+          (system (format "echo ~s | ~a -q" expr (patch-exec-path *scheme*)))
+          (system (format "echo '~s' | ~a -q" expr *scheme*))))
+    #t)
+  (eqv? (exit-code '(exit)) 0)
+  (eqv? (exit-code '(exit 15)) 15)
+  (eqv? (exit-code '(exit 0)) 0)
+  (eqv? (exit-code '(exit 24 7)) 24)
+  (eqv? (exit-code '(exit 0 1 2)) 0)
+  (eqv? (exit-code '(exit 3.14)) 1)
+  (eqv? (exit-code '(exit 9.8 3.14)) 1)
+  (begin
+    (with-output-to-file "testfile-exit.ss"
+      (lambda ()
+        (for-each pretty-print
+          '((import (scheme))
+            (apply exit (map string->number (command-line-arguments))))))
+      'replace)
+    #t)
+  (eqv? (system (format "~a --script testfile-exit.ss" (patch-exec-path *scheme*))) 0)
+  (eqv? (system (format "~a --script testfile-exit.ss 5" (patch-exec-path *scheme*))) 5)
+  (eqv? (system (format "~a --script testfile-exit.ss 0 1 2" (patch-exec-path *scheme*))) 0)
+  (eqv? (system (format "~a --script testfile-exit.ss 3 4 5" (patch-exec-path *scheme*))) 3)
+  (eqv? (system (format "~a --program testfile-exit.ss" (patch-exec-path *scheme*))) 0)
+  (eqv? (system (format "~a --program testfile-exit.ss 2" (patch-exec-path *scheme*))) 2)
+  (eqv? (system (format "~a --program testfile-exit.ss 0 1 2" (patch-exec-path *scheme*))) 0)
+  (eqv? (system (format "~a --program testfile-exit.ss 6 7 8" (patch-exec-path *scheme*))) 6)
  )
 
 (mat abort
@@ -3529,6 +3841,45 @@ evaluating module init
     (or (not a) (not (assq 'static (cdr a)))))
 )
 
+(mat collect-rendezvous
+  (begin
+    (define (check-working-gc collect)
+      (with-interrupts-disabled
+       (let ([p (weak-cons (gensym) #f)])
+         (collect)
+         (eq? (car p) #!bwp))))
+    (and (check-working-gc collect)
+         (check-working-gc collect-rendezvous)))
+      
+  (or (not (threaded?))
+      (let ([m (make-mutex)]
+            [c (make-condition)]
+            [done? #f])
+        (fork-thread
+         (lambda ()
+           (let loop ()
+             (mutex-acquire m)
+             (cond
+              [done?
+               (condition-signal c)
+               (mutex-release m)]
+              [else
+               (mutex-release m)
+               (loop)]))))
+        (and (check-working-gc collect-rendezvous)
+             ;; End thread:
+             (begin
+               (mutex-acquire m)
+               (set! done? #t)
+               (condition-wait c m)
+               (mutex-release m)
+               ;; Make sure the thread is really done
+               (let loop ()
+                 (unless (= 1 (#%$top-level-value '$active-threads))
+                   (loop)))
+               ;; Plain `collect` should work again:
+               (check-working-gc collect)))))
+  )
 
 ;;; section 7.6:
 

@@ -1,5 +1,5 @@
 ;;; foreign.ms
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -176,7 +176,7 @@
                       (+ v ...)))))))))
 
 (machine-case
-  [(i3ob ti3ob a6ob ta6ob i3fb ti3fb a6fb ta6fb a6s2 ta6s2 i3s2 ti3s2 i3qnx ti3qnx)
+  [(i3ob ti3ob a6ob ta6ob a6s2 ta6s2 i3s2 ti3s2 i3qnx ti3qnx)
    (mat load-shared-object
       (file-exists? "foreign1.so")
       (begin (load-shared-object "./foreign1.so") #t)
@@ -189,6 +189,14 @@
       (file-exists? "foreign1.so")
       (begin (load-shared-object "./foreign1.so") #t)
       (begin (load-shared-object "libc.so.6") #t)
+      (error? (load-shared-object 3))
+    )
+   ]
+  [(i3fb ti3fb a6fb ta6fb)
+   (mat load-shared-object
+      (file-exists? "foreign1.so")
+      (begin (load-shared-object "./foreign1.so") #t)
+      (begin (load-shared-object "libc.so.7") #t)
       (error? (load-shared-object 3))
     )
    ]
@@ -2010,7 +2018,7 @@
         (foreign-callable
           (lambda (x y)
             (collect)
-            (let ([ls (make-list 20000 #\z)])
+            (let ([ls (map (lambda (x) (make-vector 200 x)) (make-list 100))])
               (collect)
               (collect)
               (collect)
@@ -2020,8 +2028,13 @@
           (scheme-object iptr)
           scheme-object))
       (define (go) (Sinvoke2 Fcons 4 5))
-      (go))
-    '(20000 4 . 5))
+      (define initial-result (go))
+      (let loop ([i 100])
+        (if (zero? i)
+            initial-result
+            (and (equal? initial-result (go))
+                 (loop (sub1 i))))))
+    '(100 4 . 5))
   (eqv?
     (let ()
       (define Sinvoke2
@@ -2478,6 +2491,31 @@
               (ftype-pointer-address fptr)))
           *m*)
         (+ $stack-depth $base-value)))
+  ;; Make sure that a callable is suitably locked, and that it's
+  ;; unlocked when the C stack is popped by an escape
+  (equal?
+    (let ()
+      (define Sinvoke2
+        (foreign-procedure "Sinvoke2"
+          (scheme-object scheme-object iptr)
+          scheme-object))
+      (define Fcons
+        (foreign-callable
+          (lambda (k y)
+            ;; Escape with locked, which should be #t
+            ;; because a callable is locked while it's
+            ;; called:
+            (k (locked-object? Fcons)))
+          (scheme-object iptr)
+          scheme-object))
+      (list
+       ;; Call and normal callable return:
+       (let ([v (Sinvoke2 Fcons (lambda (x) x) 5)])
+         (list v (locked-object? Fcons)))
+       ;; Escape from callable:
+       (let ([v ($with-exit-proc (lambda (k) (Sinvoke2 Fcons k 5)))])
+         (list v (locked-object? Fcons)))))
+    '((#t #f) (#t #f)))
 )
 
 (machine-case
@@ -2577,3 +2615,463 @@
               (equal? s3 "#<procedure abort>")
               (eqv? pid^ pid)))))))
 )
+
+(mat varargs
+  (begin
+    (define load-libc
+      (machine-case
+        [(i3ob ti3ob a6ob ta6ob a6s2 ta6s2 i3s2 ti3s2 i3qnx ti3qnx i3nb ti3nb a6nb ta6nb)
+         '(load-shared-object "libc.so")]
+        [(i3le ti3le a6le ta6le arm32le tarm32le ppc32le tppc32le)
+         '(load-shared-object "libc.so.6")]
+        [(i3fb ti3fb a6fb ta6fb)
+         '(load-shared-object "libc.so.7")]
+        [(i3nt ti3nt a6nt ta6nt)
+         '(load-shared-object "msvcrt.dll")]
+        [(i3osx ti3osx a6osx ta6osx)
+         '(load-shared-object "libc.dylib")]
+        [else (error 'load-libc "unrecognized machine type ~s" (machine-type))]))
+    #t)
+  (equal?
+    (with-input-from-string
+      (separate-eval
+        `(begin
+           ,load-libc
+           (define f (foreign-procedure "printf" (string double) int))
+           (f "(%g)" 3.5)
+           (void)))
+      read)
+    '(3.5))
+  (equal?
+    (with-input-from-string
+      (separate-eval
+        `(begin
+           ,load-libc
+           (define f (foreign-procedure "printf" (string double double double double double double) int))
+           (f "(%g %g %g %g %g %g)" 3.5 2.5 -1.5 6.75 8.25 -9.5)
+           (void)))
+      read)
+    '(3.5 2.5 -1.5 6.75 8.25 -9.5))
+  (equal?
+    (with-input-from-string
+      (separate-eval
+        `(begin
+           ,load-libc
+           (define f (foreign-procedure "printf" (string double double double double double double double double) int))
+           (f "(%g %g %g %g %g %g %g %g)" 3.5 2.5 -1.5 6.75 8.25 -9.5 1e32 -4.5)
+           (void)))
+      read)
+    '(3.5 2.5 -1.5 6.75 8.25 -9.5 1e32 -4.5))
+  (equal?
+    (with-input-from-string
+      (separate-eval
+        `(begin
+           ,load-libc
+           (define f (foreign-procedure "printf" (string double double double double double double double double double double) int))
+           (f "(%g %g %g %g %g %g %g %g %g %g)" 3.5 2.5 -1.5 6.75 8.25 -9.5 1e32 -4.5 7.25 -0.5)
+           (void)))
+      read)
+    '(3.5 2.5 -1.5 6.75 8.25 -9.5 1e32 -4.5 7.25 -0.5))
+)
+
+(mat structs
+  (begin
+    (define-ftype i8 integer-8)
+    (define-ftype u8 unsigned-8)
+    (define-ftype u16 unsigned-16)
+    (define-ftype i64 integer-64)
+    (define-syntax check*
+      (syntax-rules ()
+        [(_ (conv ...) T s [vi ...] [T-ref ...] [T-set! ...])
+         (let ()
+           (define-ftype callback (function conv ... ((& T)) double))
+           (define-ftype callback-two (function conv ... ((& T) (& T)) double))
+           (define-ftype pre-int-callback (function conv ... (int (& T)) double))
+           (define-ftype pre-double-callback (function conv ... (double (& T)) double))
+           (define-ftype callback-r (function conv ... () (& T)))
+           (define get (foreign-procedure conv ... (format "f4_get~a" s)
+                                          () (& T)))
+           (define sum (foreign-procedure conv ... (format "f4_sum~a" s)
+                                          ((& T)) double))
+           (define sum_two (foreign-procedure conv ... (format "f4_sum_two~a" s)
+                                              ((& T) (& T)) double))
+           (define sum_pre_int (foreign-procedure conv ... (format "f4_sum_pre_int~a" s)
+                                                  (int (& T)) double))
+           (define sum_pre_int_int (foreign-procedure conv ... (format "f4_sum_pre_int_int~a" s)
+                                                      (int int (& T)) double))
+           (define sum_pre_int_int_int_int (foreign-procedure conv ... (format "f4_sum_pre_int_int_int_int~a" s)
+                                                              (int int int int (& T)) double))
+           (define sum_pre_int_int_int_int_int_int (foreign-procedure conv ... (format "f4_sum_pre_int_int_int_int_int_int~a" s)
+                                                                      (int int int int int int (& T)) double))
+           (define sum_post_int (foreign-procedure conv ... (format "f4_sum~a_post_int" s)
+                                                   ((& T) int) double))
+           (define sum_pre_double (foreign-procedure conv ... (format "f4_sum_pre_double~a" s)
+                                                     (double (& T)) double))
+           (define sum_pre_double_double (foreign-procedure conv ... (format "f4_sum_pre_double_double~a" s)
+                                                            (double double (& T)) double))
+           (define sum_pre_double_double_double_double (foreign-procedure conv ... (format "f4_sum_pre_double_double_double_double~a" s)
+                                                                          (double double double double (& T)) double))
+           (define sum_pre_double_double_double_double_double_double_double_double
+             (foreign-procedure conv ... (format "f4_sum_pre_double_double_double_double_double_double_double_double~a" s)
+                                (double double double double double double double double (& T)) double))
+           (define sum_post_double (foreign-procedure conv ... (format "f4_sum~a_post_double" s)
+                                                      ((& T) double) double))
+           (define cb_send (foreign-procedure conv ... (format "f4_cb_send~a" s)
+                                              ((* callback)) double))
+           (define cb_send_two (foreign-procedure conv ... (format "f4_cb_send_two~a" s)
+                                                  ((* callback-two)) double))
+           (define cb_send_pre_int (foreign-procedure conv ... (format "f4_cb_send_pre_int~a" s)
+                                                      ((* pre-int-callback)) double))
+           (define cb_send_pre_double (foreign-procedure conv ... (format "f4_cb_send_pre_double~a" s)
+                                                         ((* pre-double-callback)) double))
+           (define sum_cb (foreign-procedure conv ... (format "f4_sum_cb~a" s)
+                                             ((* callback-r)) double))
+           (define-syntax with-callback
+             (syntax-rules ()
+               [(_ ([id rhs])
+                   body)
+                (let ([id rhs])
+                  (let ([v body])
+                    (unlock-object
+                     (foreign-callable-code-object
+                      (ftype-pointer-address id)))
+                    v))]))
+           (and (let ([v (make-ftype-pointer T (malloc_at_boundary (ftype-sizeof T)))])
+                  (get v)
+                  (and (= (T-ref v) vi)
+                       ...
+                       (begin
+                         (free_at_boundary (ftype-pointer-address v))
+                         #t)))
+                (let ([a (make-ftype-pointer T (malloc_at_boundary (ftype-sizeof T)))])
+                  (T-set! a) ...
+                  (and (= (+ vi ...) (sum a))
+                       (= (+ vi ... vi ...) (sum_two a a))
+                       (= (+ 8 vi ...) (sum_pre_int 8 a))
+                       (= (+ 8 9 vi ...) (sum_pre_int_int 8 9 a))
+                       (= (+ 8 9 10 11 vi ...) (sum_pre_int_int_int_int 8 9 10 11 a))
+                       (= (+ 8 9 10 11 12 13 vi ...) (sum_pre_int_int_int_int_int_int 8 9 10 11 12 13 a))
+                       (= (+ 8 vi ...) (sum_post_int a 8))
+                       (= (+ 8.25 vi ...) (sum_pre_double 8.25 a))
+                       (= (+ 8.25 9.25 vi ...) (sum_pre_double_double 8.25 9.25 a))
+                       (= (+ 8.25 9.25 10.25 11.25 vi ...) (sum_pre_double_double_double_double 8.25 9.25 10.25 11.25 a))
+                       (= (+ 8.25 9.25 10.25 11.25 12.25 13.25 14.25 15.25 vi ...)
+                          (sum_pre_double_double_double_double_double_double_double_double
+                           8.25 9.25 10.25 11.25 12.25 13.25 14.25 15.25 a))
+                       (= (+ 8.25 vi ...) (sum_post_double a 8.25))
+                       (= (+ 1.0 vi ...) (with-callback ([cb (make-ftype-pointer
+                                                              callback
+                                                              (lambda (r)
+                                                                (exact->inexact (+ (T-ref r) ...))))])
+                                           (cb_send cb)))
+                       (= (+ 1.0 vi ... vi ...) (with-callback ([cb (make-ftype-pointer
+                                                                     callback-two
+                                                                     (lambda (r1 r2)
+                                                                       (exact->inexact (+ (T-ref r1) ...
+                                                                                          (T-ref r2) ...))))])
+                                                  (cb_send_two cb)))
+                       (= (+ 1.0 8 vi ...) (with-callback ([cb (make-ftype-pointer
+                                                                pre-int-callback
+                                                                (lambda (v r)
+                                                                  (exact->inexact (+ v (T-ref r) ...))))])
+                                             (cb_send_pre_int cb)))
+                       (= (+ 1.0 8.25 vi ...) (with-callback ([cb (make-ftype-pointer
+                                                                   pre-double-callback
+                                                                   (lambda (v r)
+                                                                     (exact->inexact (+ v (T-ref r) ...))))])
+                                                (cb_send_pre_double cb)))
+                       (= (+ vi ...) (with-callback ([cb (make-ftype-pointer
+                                                          callback-r
+                                                          (lambda (r)
+                                                            (T-set! r) ...))])
+                                       (sum_cb cb)))
+                       (begin
+                         (free_at_boundary (ftype-pointer-address a))
+                         #t)))))]))
+    (define-syntax check*t
+      (syntax-rules ()
+        [(_ arg ...)
+         (and (check* () arg ...)
+              (check* (__collect_safe) arg ...))]))
+    (define-syntax check-n
+      (syntax-rules ()
+        [(_ [ni ti vi] ...)
+         (let ()
+           (define-ftype T (struct [ni ti] ...))
+           (define s (apply string-append
+                            "_struct"
+                            (let loop ([l '(ti ...)])
+                              (cond
+                               [(null? l) '()]
+                               [else (cons (format "_~a" (car l))
+                                           (loop (cdr l)))]))))
+           (check*t T s
+                    [vi ...]
+                    [(lambda (a) (ftype-ref T (ni) a)) ...]
+                    [(lambda (a) (ftype-set! T (ni) a vi)) ...]))]))
+    (define-syntax check
+      (syntax-rules ()
+        [(_ t1 v1)
+         (check*t t1 (format "_~a" 't1)
+                  [v1]
+                  [(lambda (a) (ftype-ref t1 () a))]
+                  [(lambda (a) (ftype-set! t1 () a v1))])]))
+    (define-syntax check-union
+      (syntax-rules ()
+        [(_ [n0 t0 v0] [ni ti vi] ...)
+         (let ()
+           (define-ftype T (union [n0 t0] [ni ti] ...))
+           (define s (apply string-append
+                            "_union"
+                            (let loop ([l '(t0 ti ...)])
+                              (cond
+                               [(null? l) '()]
+                               [else (cons (format "_~a" (car l))
+                                           (loop (cdr l)))]))))
+           (check*t T s
+                    [v0]
+                    [(lambda (a) (ftype-ref T (n0) a))]
+                    [(lambda (a) (ftype-set! T (n0) a v0))]))]))
+    (define-syntax check-1
+      (syntax-rules ()
+        [(_ t1 v1)
+         (check-n [x t1 v1])]))
+    (define-syntax check-2
+      (syntax-rules ()
+        [(_ t1 t2 v1 v2)
+         (check-n [x t1 v1] [y t2 v2])]))
+    (define-syntax check-2-set
+      (syntax-rules ()
+        [(_ t x)
+         (and
+          (check-2 t i8 (+ 1 x) 10)
+          (check-2 t short (+ 2 x) 20)
+          (check-2 t long (+ 3 x) 30)
+          (check-2 t i64 (+ 5 x) 50)
+          (check-2 short t 6 (+ 60 x))
+          (check-2 long t 7 (+ 70 x))
+          (check-2 i64 t 9 (+ 90 x))
+          (check-2 i8 t 10 (+ 100 x)))]))
+    (define-syntax check-3
+      (syntax-rules ()
+        [(_ t1 t2 t3 v1 v2 v3)
+         (check-n [x t1 v1] [y t2 v2] [z t3 v3])]))
+    (define-syntax check-3-set
+      (syntax-rules ()
+        [(_ t x)
+         (and
+          (check-3 t i8 int (+ 1 x) 10 100)
+          (check-3 t short int (+ 2 x) 20 200)
+          (check-3 t long int (+ 3 x) 30 300)
+          (check-3 t i64 int (+ 5 x) 50 500)
+          (check-3 short t int 6 (+ 60 x) 600)
+          (check-3 long t int 7 (+ 70 x) 700)
+          (check-3 i64 t int 9 (+ 90 x) 900)
+          (check-3 i8 t int 10 (+ 100 x) 1000))]))
+    (define malloc_at_boundary (foreign-procedure "malloc_at_boundary"
+                                                  (int) uptr))
+    (define free_at_boundary (foreign-procedure "free_at_boundary"
+                                                (uptr) void))
+    #t)
+  (check i8 -11)
+  (check u8 129)
+  (check short -22)
+  (check u16 33022)
+  (check long 33)
+  (check int 44)
+  (check i64 49)
+  (check float 55.0)
+  (check double 66.0)
+  (check-1 i8 -12)
+  (check-1 u8 212)
+  (check-1 short -23)
+  (check-1 u16 33023)
+  (check-1 long 34)
+  (check-1 int 45)
+  (check-1 i64 48)
+  (check-1 float 56.0)
+  (check-1 double 67.0)
+  (check-2-set int 0)
+  (check-2-set float 0.5)
+  (check-2-set double 0.25)
+  (check-2 int int 4 40)
+  (check-2 float float 4.5 40.5)
+  (check-2 double double 4.25 40.25)
+  (check-3-set int 0)
+  (check-3-set float 0.5)
+  (check-3-set double 0.25)
+  (check-3 i8 i8 i8 4 38 127)
+  (check-3 short short short 4 39 399)
+  (check-3 int int int 4 40 400)
+  (check-3 float float float 4.5 40.5 400.5)
+  (check-3 double double double 4.25 40.25 400.25)
+  (check-n [x i8 1] [y i8 2] [z i8 3] [w i8 4] [q i8 5])
+  (check-n [x i8 1] [y i8 2] [z i8 3] [w i8 4] [q i8 5] [r i8 6] [s i8 7])
+  (check-union [x i8 -17])
+  (check-union [x u8 217])
+  (check-union [x short -27])
+  (check-union [x u16 33027])
+  (check-union [x long 37])
+  (check-union [x int 47])
+  (check-union [x i64 49])
+  (check-union [x float 57.0])
+  (check-union [x double 77.0])
+  (check-union [x i8 18] [y int 0])
+  (check-union [x short 28] [y int 0])
+  (check-union [x long 38] [y int 0])
+  (check-union [x int 48] [y int 0])
+  (check-union [x i64 43] [y int 0])
+  (check-union [x float 58.0] [y int 0])
+  (check-union [x double 68.0] [y int 0])
+  )
+
+(mat collect-safe
+  (error? (foreign-procedure __collect_safe "unknown" (utf-8) void))
+  (error? (foreign-procedure __collect_safe "unknown" (utf-16be) void))
+  (error? (foreign-procedure __collect_safe "unknown" (utf-16le) void))
+  (error? (foreign-procedure __collect_safe "unknown" (utf-32be) void))
+  (error? (foreign-procedure __collect_safe "unknown" (utf-32le) void))
+  (error? (foreign-procedure __collect_safe "unknown" (string) void))
+  (error? (foreign-procedure __collect_safe "unknown" (wstring) void))
+  (error? (foreign-callable __collect_safe (lambda () #f) () utf-8))
+  (error? (foreign-callable __collect_safe (lambda () #f) () utf-16le))
+  (error? (foreign-callable __collect_safe (lambda () #f) () utf-16be))
+  (error? (foreign-callable __collect_safe (lambda () #f) () utf-32le))
+  (error? (foreign-callable __collect_safe (lambda () #f) () utf-32be))
+  (error? (foreign-callable __collect_safe (lambda () #f) () string))
+  (error? (foreign-callable __collect_safe (lambda () #f) () wstring))
+  (begin
+    (define-ftype thread-callback-T (function __collect_safe (double) double))
+    (define (call-with-thread-callback cb-proc proc)
+      (let ([callback (make-ftype-pointer thread-callback-T cb-proc)])
+        (let ([r (proc callback)])
+          (unlock-object
+           (foreign-callable-code-object
+            (ftype-pointer-address callback)))
+          r)))
+    (define (call-in-unknown-thread-1 proc arg n-times)
+      ;; Baseline implementation that uses the current thread
+      (let loop ([i 0] [arg arg])
+        (cond
+         [(= i n-times) arg]
+         [else (loop (fx+ i 1) (proc arg))])))
+    (define call-in-unknown-thread-2
+      ;; Call in the current thread, but through the foreign procedure
+      (if (and (threaded?)
+               (foreign-entry? "call_in_unknown_thread"))
+          (let ([call (foreign-procedure "call_in_unknown_thread"
+                                         ((* thread-callback-T) double int boolean boolean)
+                                         double)])
+            (lambda (proc arg n-times)
+              (call-with-thread-callback
+               proc
+               (lambda (callback) (call callback arg n-times #f #t)))))
+          call-in-unknown-thread-1))
+    (define call-in-unknown-thread-3
+      ;; Call in a truly unknown thread:
+      (if (and (threaded?)
+               (foreign-entry? "call_in_unknown_thread"))
+          (let ([call (foreign-procedure "call_in_unknown_thread"
+                                         ((* thread-callback-T) double int boolean boolean)
+                                         double)])
+            (lambda (proc arg n-times)
+              (call-with-thread-callback
+               proc
+               (lambda (callback) (call callback arg n-times #t #t)))))
+          call-in-unknown-thread-1))
+    (define call-in-unknown-thread-4
+      ;; In an truly unknown thread, but also using `__collect_safe` to
+      ;; deactivate the current thread instead of using `Sdeactivate_thread`
+      ;; within the foreign function:
+      (if (and (threaded?)
+               (foreign-entry? "call_in_unknown_thread"))
+          (let ([call (foreign-procedure __collect_safe "call_in_unknown_thread"
+                                         ((* thread-callback-T) double int boolean boolean)
+                                         double)])
+            (lambda (proc arg n-times)
+              (call-with-thread-callback
+               proc
+               (lambda (callback) (call callback arg n-times #t #f)))))
+          call-in-unknown-thread-1))
+    #t)
+  ;; These tests will pass only if `collect` can run, where `collect`
+  ;; can run only if a single thread is active
+  (equal? (call-in-unknown-thread-1 (lambda (n) (collect 0) (+ n 1.0)) 3.5 1)
+          4.5)
+  (equal? (call-in-unknown-thread-2 (lambda (n) (collect 0) (+ n 1.0)) 3.5 2)
+          5.5)
+  (equal? (call-in-unknown-thread-3 (lambda (n) (collect 0) (+ n 1.0)) 3.5 3)
+          6.5)
+  (equal? (call-in-unknown-thread-4 (lambda (n) (collect 0) (+ n 1.0)) 3.5 4)
+          7.5)
+  (equal? (let loop ([n 10.0])
+            (call-in-unknown-thread-4
+             (lambda (n)
+               (cond
+                [(zero? n) (collect) 0.5]
+                [else (+ 1.0 (loop (- n 1.0)))]))
+             n
+             1))
+          10.5)
+  ;; Try to crash a `__collect_safe` foreign-procedure call by moving the
+  ;; return address out from under the foreign procedure. This attempt
+  ;; should fail, because deactivating a thread first locks the
+  ;; current code object.
+  (or (not (threaded?))
+      (let ([m (make-mutex)]
+            [done? #f]
+            [ok? #t])
+        (define object->addr
+          (foreign-procedure "(cs)fxmul"
+                             (scheme-object uptr)
+                             uptr))
+        (fork-thread (lambda ()
+                       (let loop ([i 10])
+                         (unless (zero? i)
+                           (let ([spin (eval '(foreign-procedure __collect_safe "spin_a_while" (int unsigned unsigned) unsigned))])
+                             (spin 1000000 0 1))
+                           (loop (sub1 i))))
+                       (mutex-acquire m)
+                       (set! done? #t)
+                       (mutex-release m)))
+        (let loop ()
+          (mutex-acquire m)
+          (let ([done? done?])
+            (mutex-release m)
+            (unless done?
+              (let loop ([i 10])
+                (unless (zero? i)
+                  (eval '(foreign-procedure "spin_a_while" () void))
+                  (loop (sub1 i))))
+              (loop))))
+        ok?))
+)
+
+(machine-case
+  [(i3nt ti3nt)
+   (mat i3nt-stdcall-collect-safe
+     (equal?
+       (let ()
+         (define sum (foreign-procedure __collect_safe __stdcall "_sum_stdcall@8" (int int) int))
+	 (sum 3 7))
+        10)
+     (equal?
+      (let ()
+        (define Sinvoke2
+          (foreign-procedure __collect_safe "Sinvoke2_stdcall"
+            (scheme-object scheme-object iptr)
+            scheme-object))
+        (define Fcons
+          (foreign-callable __collect_safe __stdcall
+            (lambda (x y) (cons x y))
+            (scheme-object iptr)
+            scheme-object))
+        (Sinvoke2 Fcons 41 51))
+      '(41 . 51)))
+    (mat i3nt-com-thread
+     (eqv?
+       (let ()
+         (define com-instance ((foreign-procedure "get_com_instance" () iptr)))
+         ((foreign-procedure __collect_safe __com 0 (iptr int) int) com-instance 3)
+         ((foreign-procedure __collect_safe __com 4 (iptr int) int) com-instance 17))
+       37))])

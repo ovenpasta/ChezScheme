@@ -1,5 +1,5 @@
 ;;; fl.ms
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -805,6 +805,8 @@
     (error? (fleven? 3.2))
     (error? (fleven? 3.0+1.0i))
     (error? (fleven? 1+1i))
+    (error? (fleven? +inf.0))
+    (error? (fleven? +nan.0))
     (not (fleven? -3.0))
     (fleven? 2.0)
     (not (fleven? 1208312083280477.0))
@@ -821,6 +823,8 @@
     (error? (flodd? 3.2))
     (error? (flodd? 3.0+1.0i))
     (error? (flodd? 3+1i))
+    (error? (flodd? +inf.0))
+    (error? (flodd? +nan.0))
     (flodd? -3.0)
     (not (flodd? 2.0))
     (flodd? 1208312083280477.0)

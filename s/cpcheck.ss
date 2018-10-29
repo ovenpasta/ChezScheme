@@ -1,5 +1,5 @@
 ;;; cpcheck.ss
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -130,11 +130,11 @@
       [(set! ,maybe-src ,x ,[e #f -> e]) `(set! ,maybe-src ,x ,e)]
       [(seq ,[e1 #f -> e1] ,[e2]) `(seq ,e1 ,e2)]
       [(if ,[e1 #f -> e1] ,[e2 #f -> e2] ,[e3 #f -> e3]) `(if ,e1 ,e2 ,e3)]
-      [(foreign ,conv ,name ,e (,arg-type* ...) ,result-type)
+      [(foreign (,conv* ...) ,name ,e (,arg-type* ...) ,result-type)
        (check! ctxt (list (length arg-type*)))
-       `(foreign ,conv ,name ,(Expr e #f) (,arg-type* ...) ,result-type)]
-      [(fcallable ,conv ,[e #f -> e] (,arg-type* ...) ,result-type)
-        `(fcallable ,conv ,e (,arg-type* ...) ,result-type)]
+       `(foreign (,conv* ...) ,name ,(Expr e #f) (,arg-type* ...) ,result-type)]
+      [(fcallable (,conv* ...) ,[e #f -> e] (,arg-type* ...) ,result-type)
+        `(fcallable (,conv* ...) ,e (,arg-type* ...) ,result-type)]
       [(call ,preinfo0
          (case-lambda ,preinfo1
            (clause (,x* ...) ,interface ,body)

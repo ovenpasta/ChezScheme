@@ -1,5 +1,5 @@
 ;;; enum.ms
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -101,6 +101,8 @@
   (error? (make-enumeration 3))
   (error? (enum-set-universe 3))
   (error? (enum-set-indexer 3))
+  (error? (let ([e (make-enumeration '(a b c))])
+            ((enum-set-indexer e) 1)))
   (error? (enum-set->list 3))
   (equal? '(a b)
           (let ()

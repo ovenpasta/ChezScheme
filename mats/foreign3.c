@@ -1,5 +1,5 @@
 /* foreign3.c
- * Copyright 1984-2016 Cisco Systems, Inc.
+ * Copyright 1984-2017 Cisco Systems, Inc.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -178,6 +178,10 @@ EXPORT char Srvtest_char(ptr code, ptr x1) {
 }
 
 #ifdef WIN32
+EXPORT int __stdcall sum_stdcall(int a, int b) {
+    return a + b;
+}
+
 EXPORT ptr Sinvoke2_stdcall(ptr code, ptr x1, iptr x2) {
     return (*((ptr (__stdcall *) PROTO((ptr, iptr)))Sforeign_callable_entry_point(code)))(x1, x2);
 }

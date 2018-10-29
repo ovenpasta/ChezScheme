@@ -1,5 +1,5 @@
 ;;; 3.ms
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -1087,6 +1087,16 @@
          (define-values (args . rot) (values #'(x ...) #'(x ...) 3))
          (list args rot))])
     '((a b c) ((a b c) 3)))
+  (equal?
+   (let ()
+     (define x 1)
+     (define-values ()
+       (begin
+         "don't interrupt definitions"
+         (values)))
+     (define y 2)
+     (list x y))
+   '(1 2))
 )
 
 (mat assimilation
@@ -2039,6 +2049,26 @@
     (let ()
       (import $mrvs-double-call)
       (double-call 'a)))
+
+  ; regression testing for handling mvset in tail context
+  (call-with-values
+    (lambda ()
+      (call-with-values
+        (lambda ()
+          (+ (random 1) 7))
+        list))
+    (lambda l (equal? l '((7)))))
+
+  ; regression testing for handling mvset in predicate context
+  (if (call-with-values
+        (lambda ()
+          (call-with-values
+            (lambda ()
+              (+ (random 1) 7))
+            list))
+        (lambda l (equal? l '((7)))))
+      #t
+      #f)
 )
 
 (mat let-values

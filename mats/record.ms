@@ -1,5 +1,5 @@
 ;;; record.ms
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -2881,6 +2881,380 @@
          (let ((x (cons 3 4)))
            (set-car! x x)
            (equal? (format "~s" x) "#0=(#0# . 4)"))))
+)
+
+(mat record-equal/hash
+  (begin
+    (define (equiv? v1 v2)
+      (and (equal? v1 v2)
+           (= (equal-hash v1) (equal-hash v2))
+           (let ([ht (make-hashtable equal-hash equal?)])
+             (hashtable-set! ht v1 "yes")
+             (equal? "yes" (hashtable-ref ht v2 "no")))))
+    
+    (define (not-equiv? v1 v2)
+      (and (not (equal? v1 v2))
+           (let ([ht (make-hashtable equal-hash equal?)])
+             (hashtable-set! ht v1 "yes")
+             (equal? "no" (hashtable-ref ht v2 "no")))))
+
+    (define-record-type E+H$a
+      (fields (mutable x)
+              (immutable y)))
+
+    (define-record-type E+H$a+
+      (parent E+H$a)
+      (fields (mutable z)))
+
+    (define-record-type E+H$b
+      (fields (immutable x)
+              (mutable y))
+      (opaque #t))
+
+    (define-record-type E+H$b+
+      (parent E+H$b)
+      (fields (mutable z))
+      (opaque #t))
+
+    (define (E+H$a-equal? a1 a2 eql?)
+      (eql? (E+H$a-x a1) (E+H$a-x a2)))
+    (define (E+H$a-hash a hc)
+      (hc (E+H$a-x a)))
+
+    (define (E+H$b-equal? b1 b2 eql?)
+      (eql? (E+H$b-y b1) (E+H$b-y b2)))
+    (define (E+H$b-hash b hc)
+      (hc (E+H$b-y b)))
+
+    (define cyclic-E+H$a1 (make-E+H$a 1 2))
+    (E+H$a-x-set! cyclic-E+H$a1 cyclic-E+H$a1)
+    (define cyclic-E+H$a2 (make-E+H$a 1 2))
+    (E+H$a-x-set! cyclic-E+H$a2 cyclic-E+H$a2)
+
+    (define cyclic-E+H$b+1 (make-E+H$b+ 1 2 3))
+    (define cyclic-E+H$b+2 (make-E+H$b+ 1 2 3))
+    (E+H$b-y-set! cyclic-E+H$b+1 (list 1 2 3 (box cyclic-E+H$b+2)))
+    (E+H$b-y-set! cyclic-E+H$b+2 (list 1 2 3 (box cyclic-E+H$b+1)))
+
+    #t)
+
+  (not-equiv? (make-E+H$a 1 2) (make-E+H$a 1 2))
+  (not-equiv? (make-E+H$b 1 2) (make-E+H$b 1 2))
+
+  (not (record-type-equal-procedure (record-type-descriptor E+H$a)))
+  (not (record-type-hash-procedure (record-type-descriptor E+H$a)))
+  (not (record-type-equal-procedure (record-type-descriptor E+H$a+)))
+  (not (record-type-hash-procedure (record-type-descriptor E+H$a+)))
+  (not (record-type-equal-procedure (record-type-descriptor E+H$b+)))
+  (not (record-type-hash-procedure (record-type-descriptor E+H$b+)))
+  (not (record-type-equal-procedure (record-type-descriptor E+H$b)))
+  (not (record-type-hash-procedure (record-type-descriptor E+H$b)))
+
+  (begin
+    (record-type-equal-procedure (record-type-descriptor E+H$a) E+H$a-equal?)
+    (record-type-hash-procedure (record-type-descriptor E+H$a) E+H$a-hash)
+    #t)
+
+  (eq? (record-type-equal-procedure (record-type-descriptor E+H$a)) E+H$a-equal?)
+  (eq? (record-type-hash-procedure (record-type-descriptor E+H$a)) E+H$a-hash)
+  (not (record-type-equal-procedure (record-type-descriptor E+H$a+)))
+  (not (record-type-hash-procedure (record-type-descriptor E+H$a+)))
+  (eq? (record-equal-procedure (make-E+H$a 1 2) (make-E+H$a 1 2)) E+H$a-equal?)
+  (eq? (record-equal-procedure (make-E+H$a+ 1 3 5) (make-E+H$a 1 2)) E+H$a-equal?)
+  (eq? (record-equal-procedure (make-E+H$a 1 2) (make-E+H$a+ 1 3 5)) E+H$a-equal?)
+  (eq? (record-equal-procedure (make-E+H$a+ 1 3 5) (make-E+H$a+ 1 3 5)) E+H$a-equal?)
+  (eq? (record-hash-procedure (make-E+H$a 1 2)) E+H$a-hash)
+  (eq? (record-hash-procedure (make-E+H$a+ 1 3 5)) E+H$a-hash)
+  (not (record-type-equal-procedure (record-type-descriptor E+H$a+)))
+  (not (record-type-hash-procedure (record-type-descriptor E+H$a+)))
+  
+  (equiv? (make-E+H$a 1 2) (make-E+H$a 1 2))
+  (equiv? (make-E+H$a 1 2) (make-E+H$a 1 3))
+  
+  (equiv? (make-E+H$a 1 2) (make-E+H$a+ 1 3 5))
+  (equiv? (make-E+H$a+ 1 3 5) (make-E+H$a 1 2))
+  
+  (not-equiv? (make-E+H$a+ 2 3 5) (make-E+H$a 1 2))
+  (not-equiv? (make-E+H$a+ 2 3 5) (make-E+H$a+ 1 2 4))
+
+  (not (equiv? (make-E+H$a 1 2) (make-E+H$b 1 2)))
+
+  (not-equiv? (make-E+H$b 1 2) (make-E+H$b 1 2))
+  (not-equiv? (make-E+H$b+ 1 2 3) (make-E+H$b+ 1 2 3))
+
+  (not (record-type-equal-procedure (record-type-descriptor E+H$b+)))
+  (not (record-type-hash-procedure (record-type-descriptor E+H$b+)))
+  (not (record-type-equal-procedure (record-type-descriptor E+H$b)))
+  (not (record-type-hash-procedure (record-type-descriptor E+H$b)))
+
+  (begin
+    (record-type-equal-procedure (record-type-descriptor E+H$b+) E+H$b-equal?)
+    (record-type-hash-procedure (record-type-descriptor E+H$b+) E+H$b-hash)
+    #t)
+
+  (not-equiv? (make-E+H$b 1 2) (make-E+H$b 1 2))
+  (equiv? (make-E+H$b+ 0 2 4) (make-E+H$b+ 1 2 3))
+
+  (equiv? cyclic-E+H$a1 cyclic-E+H$a2)
+  (equiv? cyclic-E+H$a1 (make-E+H$a cyclic-E+H$a2 3))
+
+  (equiv? cyclic-E+H$b+1 cyclic-E+H$b+2)
+
+  (begin
+    (record-type-equal-procedure (record-type-descriptor E+H$a+) E+H$a-equal?)
+    (record-type-hash-procedure (record-type-descriptor E+H$a+) E+H$a-hash)
+    #t)
+
+  (eq? (record-type-equal-procedure (record-type-descriptor E+H$a)) E+H$a-equal?)
+  (eq? (record-type-hash-procedure (record-type-descriptor E+H$a)) E+H$a-hash)
+
+  (equiv? (make-E+H$a+ 1 2 4) (make-E+H$a+ 1 3 5))
+  (not-equiv? (make-E+H$a+ 1 3 5) (make-E+H$a 1 2))
+  (not-equiv? (make-E+H$a 1 2) (make-E+H$a+ 1 3 5))
+
+  (begin
+    (record-type-equal-procedure (record-type-descriptor E+H$a) E+H$a-equal?)
+    (record-type-hash-procedure (record-type-descriptor E+H$a) E+H$a-hash)
+    #t)
+
+  (not (record-equal-procedure (make-E+H$a+ 1 3 5) (make-E+H$a 1 2)))
+
+  (equiv? (make-E+H$a+ 1 2 4) (make-E+H$a+ 1 3 5))
+  (not-equiv? (make-E+H$a+ 1 3 5) (make-E+H$a 1 2))
+  (not-equiv? (make-E+H$a 1 2) (make-E+H$a+ 1 3 5))
+
+  (begin
+    (record-type-equal-procedure (record-type-descriptor E+H$a+) #f)
+    (record-type-hash-procedure (record-type-descriptor E+H$a+) #f)
+    #t)
+
+  (not (record-type-equal-procedure (record-type-descriptor E+H$a+)))
+  (not (record-type-hash-procedure (record-type-descriptor E+H$a+)))
+
+  (eq? (record-equal-procedure (make-E+H$a+ 1 3 5) (make-E+H$a 1 2)) E+H$a-equal?)
+  (eq? (record-hash-procedure (make-E+H$a+ 1 3 5)) E+H$a-hash)
+
+  (equiv? (make-E+H$a+ 1 3 5) (make-E+H$a 1 2))
+  (equiv? (make-E+H$a 1 2) (make-E+H$a+ 1 3 5))
+  (equiv? (make-E+H$a+ 1 2 4) (make-E+H$a+ 1 3 5))
+
+  (error? ; not an rtd
+    (record-type-equal-procedure 7))
+  (error? ; not an rtd
+    (record-type-equal-procedure 7 (lambda (x y e?) #f)))
+  (error? ; not a procedure or #f
+    (record-type-equal-procedure (record-type-descriptor E+H$a+) 7))
+  (error? ; not an rtd
+    (record-type-hash-procedure 7))
+  (error? ; not an rtd
+    (record-type-hash-procedure 7 (lambda (x y e?) #f)))
+  (error? ; not a procedure or #f
+    (record-type-hash-procedure (record-type-descriptor E+H$a+) 7))
+  (error? ; not a record
+    (record-equal-procedure 7 (make-E+H$a 1 2)))
+  (error? ; not a record
+    (record-equal-procedure (make-E+H$a 1 2) 7))
+  (error? ; not a record
+    (record-hash-procedure 7))
+
+  ; csug examples
+  (begin
+    (define-record marble (color quality))
+    #t)
+
+  (not (record-type-equal-procedure (record-type-descriptor marble)))
+  (not (equal? (make-marble 'blue 'medium) (make-marble 'blue 'medium)))
+  (not (equal? (make-marble 'blue 'medium) (make-marble 'blue 'high)))
+
+  ; Treat marbles as equal when they have the same color
+  (begin
+    (record-type-equal-procedure (record-type-descriptor marble)
+      (lambda (m1 m2 eql?)
+        (eql? (marble-color m1) (marble-color m2))))
+    (record-type-hash-procedure (record-type-descriptor marble)
+      (lambda (m hash)
+        (hash (marble-color m))))
+    #t)
+
+  (equal? (make-marble 'blue 'medium) (make-marble 'blue 'high))
+  (not (equal? (make-marble 'red 'high) (make-marble 'blue 'high)))
+
+  (begin
+    (define ht (make-hashtable equal-hash equal?))
+    (hashtable-set! ht (make-marble 'blue 'medium) "glass")
+    #t)
+
+  (equal? (hashtable-ref ht (make-marble 'blue 'high) #f) "glass")
+
+  (begin
+    (define-record shooter marble (size))
+    #t)
+
+  (equal? (make-marble 'blue 'medium) (make-shooter 'blue 'large 17)) ;=> #t
+  (equal? (make-shooter 'blue 'large 17) (make-marble 'blue 'medium)) ;=> #t
+  (equal? (hashtable-ref ht (make-shooter 'blue 'high 17) #f) "glass")
+
+  (begin
+    (define-record-type node
+      (nongenerative)
+      (fields (mutable left) (mutable right)))
+    (record-type-equal-procedure (record-type-descriptor node)
+      (lambda (x y e?)
+        (and
+          (e? (node-left x) (node-left y))
+          (e? (node-right x) (node-right y)))))
+    (record-type-hash-procedure (record-type-descriptor marble)
+      (lambda (x hash)
+        (+ (hash (node-left x)) (hash (node-right x)) 23)))
+    (define graph1
+      (let ([x (make-node "a" (make-node #f "b"))])
+        (node-left-set! (node-right x) x)
+        x))
+    (define graph2
+      (let ([x (make-node "a" (make-node (make-node "a" #f) "b"))])
+        (node-right-set! (node-left (node-right x)) (node-right x))
+        x))
+    (define graph3
+      (let ([x (make-node "a" (make-node #f "c"))])
+        (node-left-set! (node-right x) x)
+        x))
+    #t)
+
+  (equal? graph1 graph2)
+  (not (equal? graph1 graph3))
+  (not (equal? graph2 graph3))
+
+  (begin
+    (define h (make-hashtable equal-hash equal?))
+    (hashtable-set! h graph1 #t)
+    #t)
+
+  (hashtable-ref h graph1 #f)
+  (hashtable-ref h graph2 #f)
+  (not (hashtable-ref h graph3 #f))
+
+  (begin
+    (define record-hash
+      (lambda (x hash)
+        (let ([rtd (record-rtd x)])
+          (do ([field-name* (csv7:record-type-field-names rtd) (cdr field-name*)]
+               [i 0 (fx+ i 1)]
+               [h 0 (+ h (hash ((csv7:record-field-accessor rtd i) x)))])
+            ((null? field-name*) h)))))
+    (define record-equal?
+      (lambda (x y e?)
+        (let ([rtd (record-rtd x)])
+          (and (eq? (record-rtd y) rtd)
+               (let f ([field-name* (csv7:record-type-field-names rtd)] [i 0])
+                 (or (null? field-name*)
+                     (and (let ([accessor (csv7:record-field-accessor rtd i)])
+                            (e? (accessor x) (accessor y)))
+                          (f (cdr field-name*) (fx+ i 1)))))))))
+    (define equiv?
+      (lambda (x y)
+        (parameterize ([default-record-equal-procedure record-equal?])
+          (equal? x y))))
+    (define equiv-hash
+      (lambda (x)
+        (parameterize ([default-record-hash-procedure record-hash])
+          (equal-hash x))))
+    (define-record-type frob (fields (mutable q)))
+    (define-record-type frub (fields (mutable x) y z))
+    (define frob-hash
+      (lambda (x hash)
+        (raise 'frob-hash)))
+    (define frob-equal?
+      (lambda (x y e?)
+        #f))
+    (define rthp
+      (lambda (rtd)
+        (case-lambda
+          [() (record-type-hash-procedure rtd)]
+          [(x) (record-type-hash-procedure rtd x)])))
+    (define rtep
+      (lambda (rtd)
+        (case-lambda
+          [() (record-type-equal-procedure rtd)]
+          [(x) (record-type-equal-procedure rtd x)])))
+    #t)
+  (not (record-type-equal-procedure (record-type-descriptor frob)))
+  (not (record-type-hash-procedure (record-type-descriptor frob)))
+  (not (record-type-equal-procedure (record-type-descriptor frub)))
+  (not (record-type-hash-procedure (record-type-descriptor frub)))
+  (equal?
+    (parameterize ([(rthp (record-type-descriptor frob)) record-hash])
+      (list
+        (record-hash-procedure (make-frob #\q))
+        (record-hash-procedure (make-frub 1 2 3))))
+    (list record-hash #f))
+  (equal?
+    (parameterize ([(rtep (record-type-descriptor frob)) record-equal?])
+      (list
+        (record-equal-procedure (make-frub 1 2 3) (make-frub 1 2 3))
+        (record-equal-procedure (make-frub 1 2 3) (make-frob #\q))
+        (record-equal-procedure (make-frob #\q) (make-frub 1 2 3))
+        (record-equal-procedure (make-frob #\q) (make-frob #\q))))
+    (list #f #f #f record-equal?))
+  (equal?
+    (parameterize ([default-record-hash-procedure record-hash])
+      (list
+        (record-hash-procedure (make-frob #\q))
+        (record-hash-procedure (make-frub 1 2 3))))
+    (list record-hash record-hash))
+  (equal?
+    (parameterize ([default-record-equal-procedure record-equal?])
+      (list
+        (record-equal-procedure (make-frub 1 2 3) (make-frub 1 2 3))
+        (record-equal-procedure (make-frub 1 2 3) (make-frob #\q))
+        (record-equal-procedure (make-frob #\q) (make-frub 1 2 3))
+        (record-equal-procedure (make-frob #\q) (make-frob #\q))))
+    (list record-equal? record-equal? record-equal? record-equal?))
+  (equal?
+    (parameterize ([default-record-hash-procedure record-hash]
+                   [(rthp (record-type-descriptor frob)) frob-hash])
+      (list
+        (record-hash-procedure (make-frob #\q))
+        (record-hash-procedure (make-frub 1 2 3))))
+    (list frob-hash record-hash))
+  (equal?
+    (parameterize ([default-record-equal-procedure record-equal?]
+                   [(rtep (record-type-descriptor frob)) frob-equal?])
+      (list
+        (record-equal-procedure (make-frub 1 2 3) (make-frub 1 2 3))
+        (record-equal-procedure (make-frub 1 2 3) (make-frob #\q))
+        (record-equal-procedure (make-frob #\q) (make-frub 1 2 3))
+        (record-equal-procedure (make-frob #\q) (make-frob #\q))))
+    (list record-equal? #f #f frob-equal?))
+  ((lambda (x) (and (integer? x) (exact? x) (nonnegative? x)))
+    (parameterize ([default-record-hash-procedure record-hash])
+      (equal-hash (vector 1 2 (make-frub 1 2 3) 5 (make-frob #\q) 7))))
+  (eq?
+    (guard (c [(eq? c 'frob-hash) 'yup] [else (raise c)])
+      (parameterize ([default-record-hash-procedure record-hash]
+                     [(rthp (record-type-descriptor frob)) frob-hash])
+        (equal-hash (list "hello" (make-frob #\q)))))
+    'yup)
+  ((lambda (x) (and (integer? x) (exact? x) (nonnegative? x)))
+    (parameterize ([default-record-hash-procedure record-hash]
+                   [(rthp (record-type-descriptor frob)) frob-hash])
+      (equal-hash (vector 1 2 (make-frub 1 2 3) 5 6))))
+  (equiv? (make-frob #\q) (make-frob #\q))
+  (equiv? (make-frub 1 2 3) (make-frub 1 2 3))
+  (not (parameterize ([(rtep (record-type-descriptor frob)) frob-equal?])
+         (equiv? (make-frob #\q) (make-frob #\q))))
+  (parameterize ([(rtep (record-type-descriptor frob)) frob-equal?])
+    (equiv? (make-frub 1 2 3) (make-frub 1 2 3)))
+  (equal?
+    (let ([ht (make-hashtable equiv-hash equiv?)])
+      (hashtable-set! ht (make-frob #\q) 'one)
+      (hashtable-set! ht (make-frub 1 2 3) 'two)
+      (hashtable-set! ht (make-frub 'a 'b 'c) 'three)
+      (list
+        (hashtable-ref ht (make-frob #\q) #f)
+        (hashtable-ref ht (make-frub 1 2 3) #f)
+        (hashtable-ref ht (make-frub 'a 'b 'c) #f)
+        (hashtable-ref ht (make-frub 'x 'y 'z) #f)))
+    '(one two three #f))
 )
 
 (mat record19
@@ -7318,7 +7692,7 @@
              '(#($cpoint 3 4 (rgb . red)) (rgb . red) #($point -8 -15))))))
     `(begin
        (set! $color->rgb (lambda (c) (#2%cons 'rgb c)))
-       (let ([g7 (lambda (n) n)])
+       (letrec ([g7 (lambda (n) n)])
          (#3%$set-top-level-value! 'rcd1
            (#3%$make-record-constructor-descriptor
              ',record-type-descriptor? #f g7 'define-record-type)))
@@ -7392,7 +7766,7 @@
              '(#($cpoint 3 4 (rgb . red)) (rgb . red) #($point -8 -15))))))
     `(begin
        (set! $color->rgb (lambda (c) (#3%cons 'rgb c)))
-       (let ([g7 (lambda (n) n)])
+       (letrec ([g7 (lambda (n) n)])
          (#3%$set-top-level-value! 'rcd1
            (#3%$make-record-constructor-descriptor
              ',record-type-descriptor? #f g7 'define-record-type)))
@@ -8233,6 +8607,24 @@
        (if b
            (#3%$object-ref 'scheme-object 'x ,fixnum?)
            72)))
+  ; ensure we're checking to make sure field names, accessors, and
+  ; mutators are identifiers
+  (error? ; invalid field spec
+    (define-record-type foo (fields 876)))
+  (error? ; invalid field spec
+    (define-record-type foo (fields (mutable (x)))))
+  (error? ; invalid field spec
+    (define-record-type foo (fields (immutable "spam"))))
+  (error? ; invalid field spec
+    (define-record-type foo (fields (immutable (x) foo-x))))
+  (error? ; invalid accessor name
+    (define-record-type foo (fields (immutable x (foo-x)))))
+  (error? ; invalid field spec
+    (define-record-type foo (fields (mutable (x) foo-x foo-x!))))
+  (error? ; invalid accessor name
+    (define-record-type foo (fields (mutable x (foo-x) foo-x!))))
+  (error? ; invalid accessor name
+    (define-record-type foo (fields (mutable x foo-x (foo-x!)))))
 )
 
 (mat define-record-type-extensions
@@ -8460,7 +8852,7 @@
                        (new q x)))))))
            (make-foo 3))))
     `(let ([ctr 0])
-       (let ([g0 (lambda (new) (lambda (q) (new q (begin (set! ctr (#2%+ 1 xtr)) ctr))))])
+       (letrec ([g0 (lambda (new) (lambda (q) (new q (begin (set! ctr (#2%+ 1 xtr)) ctr))))])
          (#3%$make-record-constructor-descriptor ',record-type-descriptor?  #f g0 'define-record-type)
          (#3%$record ',record-type-descriptor? 3 (begin (set! ctr (#2%+ 1 xtr)) ctr)))))
   (equivalent-expansion?
@@ -8479,7 +8871,7 @@
                        (new q x)))))))
            (make-foo 3))))
     `(let ([ctr 0])
-       (let ([g0 (lambda (new) (lambda (q) (new q (begin (set! ctr (#3%+ 1 xtr)) ctr))))])
+       (letrec ([g0 (lambda (new) (lambda (q) (new q (begin (set! ctr (#3%+ 1 xtr)) ctr))))])
          (#3%$make-record-constructor-descriptor ',record-type-descriptor?  #f g0 'define-record-type)
          (#3%$record ',record-type-descriptor? 3 (begin (set! ctr (#3%+ 1 xtr)) ctr)))))
   (error? ; invalid uid

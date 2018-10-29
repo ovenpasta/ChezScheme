@@ -1,5 +1,5 @@
 ;;; mkheader.ss
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -238,7 +238,7 @@
         (deftypep "Sprocedurep" ($ mask-closure) ($ type-closure))
         (deftypep "Sflonump" ($ mask-flonum) ($ type-flonum))
   
-        (deftotypep "Svectorp" ($ mask-fixnum) ($ type-fixnum))
+        (deftotypep "Svectorp" ($ mask-vector) ($ type-vector))
         (deftotypep "Sfxvectorp" ($ mask-fxvector) ($ type-fxvector))
         (deftotypep "Sbytevectorp" ($ mask-bytevector) ($ type-bytevector))
         (deftotypep "Sstringp" ($ mask-string) ($ type-string))
@@ -265,9 +265,9 @@
         (def "Svector_length(x)"
           (format "((iptr)((uptr)~a>>~d))"
             (access "x" vector type)
-            ($ fixnum-offset)))
+            ($ vector-length-offset)))
         (defref Svector_ref vector data)
-
+        
         (def "Sfxvector_length(x)"
           (format "((iptr)((uptr)~a>>~d))"
             (access "x" fxvector type)
@@ -334,6 +334,7 @@
         (export "ptr" "Smake_uninitialized_string" "(iptr)")
         (export "ptr" "Sstring" "(const char *)")
         (export "ptr" "Sstring_of_length" "(const char *, iptr)")
+        (export "ptr" "Sstring_utf8" "(const char*, iptr)")
         (export "ptr" "Sbox" "(ptr)")
         (export "ptr" "Sinteger" "(iptr)")
         (export "ptr" "Sunsigned" "(uptr)")
@@ -371,6 +372,7 @@
         (export "void" "Sset_verbose" "(int)")
         (export "void" "Sscheme_init" "(void (*)(void))")
         (export "void" "Sregister_boot_file" "(const char *)")
+        (export "void" "Sregister_boot_file_fd" "(const char *, int fd)")
         (export "void" "Sregister_heap_file" "(const char *)")
         (export "void" "Scompact_heap" "(void)")
         (export "void" "Ssave_heap" "(const char *, int)")
@@ -386,6 +388,14 @@
           (export "int" "Sactivate_thread" "(void)")
           (export "void" "Sdeactivate_thread" "(void)")
           (export "int" "Sdestroy_thread" "(void)")
+        )
+
+        (when-feature windows
+        (nl) (comment "Windows support.")
+          (pr "#include <wchar.h>~%")
+          (export "char *" "Sgetenv" "(const char *)")
+          (export "wchar_t *" "Sutf8_to_wide" "(const char *)")
+          (export "char *" "Swide_to_utf8" "(const wchar_t *)")
         )
 
         (nl) (comment "Features.")
@@ -781,6 +791,11 @@
         (definit INITBOXREF box ref)
         (defset SETBOXREF box ref)
 
+        (defref EPHEMERONNEXT ephemeron next)
+        (definit INITEPHEMERONNEXT ephemeron next)
+        (defref EPHEMERONTRIGGERNEXT ephemeron trigger-next)
+        (definit INITEPHEMERONTRIGGERNEXT ephemeron trigger-next)
+
         (defref TLCTYPE tlc type)
         (defref TLCKEYVAL tlc keyval)
         (defref TLCHT tlc ht)
@@ -860,6 +875,7 @@
         (defref CODELEN code length)
         (defref CODERELOC code reloc)
         (defref CODENAME code name)
+        (defref CODEARITYMASK code arity-mask)
         (defref CODEFREE code closure-length)
         (defref CODEINFO code info)
         (defref CODEPINFOS code pinfo*)

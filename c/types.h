@@ -1,5 +1,5 @@
 /* types.h
- * Copyright 1984-2016 Cisco Systems, Inc.
+ * Copyright 1984-2017 Cisco Systems, Inc.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -96,7 +96,7 @@ typedef int IFASLCODE;      /* fasl type codes */
   ptr _tc = tc;\
   uptr _ap = (uptr)AP(_tc);\
   if ((uptr)n > ((uptr)EAP(_tc) - _ap)) {\
-    (x) = S_thread_get_more_room(t, n);\
+    (x) = S_get_more_room_help(_tc, _ap, t, n);\
   } else {\
     (x) = TYPE(_ap,t);\
     AP(_tc) = (ptr)(_ap + n);\
@@ -125,6 +125,7 @@ typedef struct _seginfo {
   struct _seginfo *next;                    /* pointer to the next seginfo (used in occupied_segments and unused_segs */
   struct _seginfo **dirty_prev;             /* pointer to the next pointer on the previous seginfo in the DirtySegments list */
   struct _seginfo *dirty_next;              /* pointer to the next seginfo on the DirtySegments list */
+  ptr trigger_ephemerons;                   /* ephemerons to re-check if object in segment is copied out */
   octet dirty_bytes[cards_per_segment];     /* one dirty byte per card */
 } seginfo;
 

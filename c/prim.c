@@ -1,5 +1,5 @@
 /* prim.c
- * Copyright 1984-2016 Cisco Systems, Inc.
+ * Copyright 1984-2017 Cisco Systems, Inc.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -124,6 +124,9 @@ static void create_c_entry_vector() {
 #ifdef PTHREADS
     install_c_entry(CENTRY_raw_collect_cond, (ptr)&S_collect_cond);
     install_c_entry(CENTRY_raw_tc_mutex, (ptr)&S_tc_mutex);
+    install_c_entry(CENTRY_activate_thread, proc2ptr(S_activate_thread));
+    install_c_entry(CENTRY_deactivate_thread, proc2ptr(Sdeactivate_thread));
+    install_c_entry(CENTRY_unactivate_thread, proc2ptr(S_unactivate_thread));
 #endif /* PTHREADS */
     install_c_entry(CENTRY_handle_values_error, proc2ptr(S_handle_values_error));
     install_c_entry(CENTRY_handle_mvlet_error, proc2ptr(S_handle_mvlet_error));
@@ -134,21 +137,15 @@ static void create_c_entry_vector() {
     install_c_entry(CENTRY_scan_remembered_set, proc2ptr(S_scan_remembered_set));
     install_c_entry(CENTRY_instantiate_code_object, proc2ptr(s_instantiate_code_object));
     install_c_entry(CENTRY_Sreturn, proc2ptr(S_return));
-    install_c_entry(CENTRY_Scall_ptr, proc2ptr(S_call_ptr));
-    install_c_entry(CENTRY_Scall_fptr, proc2ptr(S_call_fptr));
-    install_c_entry(CENTRY_Scall_bytevector, proc2ptr(S_call_bytevector));
-    install_c_entry(CENTRY_Scall_fixnum, proc2ptr(S_call_fixnum));
-    install_c_entry(CENTRY_Scall_int32, proc2ptr(S_call_int32));
-    install_c_entry(CENTRY_Scall_uns32, proc2ptr(S_call_uns32));
-    install_c_entry(CENTRY_Scall_double, proc2ptr(S_call_double));
-    install_c_entry(CENTRY_Scall_single, proc2ptr(S_call_single));
-    install_c_entry(CENTRY_Scall_int64, proc2ptr(S_call_int64));
-    install_c_entry(CENTRY_Scall_uns64, proc2ptr(S_call_uns64));
-    install_c_entry(CENTRY_Scall_void, proc2ptr(S_call_void));
+    install_c_entry(CENTRY_Scall_one_result, proc2ptr(S_call_one_result));
+    install_c_entry(CENTRY_Scall_any_results, proc2ptr(S_call_any_results));
 
     for (i = 0; i < c_entry_vector_size; i++) {
 #ifndef PTHREADS
-      if (i == CENTRY_raw_collect_cond || i == CENTRY_raw_tc_mutex) continue;
+      if (i == CENTRY_raw_collect_cond || i == CENTRY_raw_tc_mutex
+          || i == CENTRY_activate_thread || i == CENTRY_deactivate_thread
+          || i == CENTRY_unactivate_thread)
+        continue;
 #endif /* NOT PTHREADS */
       if (Svector_ref(S_G.c_entry_vector, i) == Sfalse) {
         fprintf(stderr, "c_entry_vector entry %d is uninitialized\n", i);
@@ -186,6 +183,7 @@ void S_prim_init() {
     Sforeign_symbol("(cs)enable_object_counts", (void *)S_enable_object_counts);
     Sforeign_symbol("(cs)set_enable_object_counts", (void *)S_set_enable_object_counts);
     Sforeign_symbol("(cs)object_counts", (void *)S_object_counts);
+    Sforeign_symbol("(cs)fire_collector", (void *)S_fire_collector);
 }
 
 static void s_instantiate_code_object() {
@@ -211,6 +209,7 @@ static void s_instantiate_code_object() {
 
     CODERELOC(new) = newreloc;
     CODENAME(new) = CODENAME(old);
+    CODEARITYMASK(new) = CODEARITYMASK(old);
     CODEFREE(new) = CODEFREE(old);
     CODEINFO(new) = CODEINFO(old);
     CODEPINFOS(new) = CODEPINFOS(old);

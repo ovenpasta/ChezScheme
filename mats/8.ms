@@ -1,5 +1,5 @@
 ;;; 8.ms
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -7976,6 +7976,19 @@
   (equal?
     (let () (import ($l3)) (f (f 3)))
     3)
+  (begin
+    ;; (export import-spec ...) empty case
+    (library ($empty) (export) (import (chezscheme)) (export (import)))
+    #t)
+  (begin
+    (library ($l4-A) (export a) (import (chezscheme)) (define a 1))
+    (library ($l4-B) (export b) (import (chezscheme)) (define b 2))
+    #t)
+  (equal? '(1 2) (let () (import ($l4-A) ($l4-B)) (list a b)))
+  (begin
+    ;; (export import-spec ...) multiple imports case
+    (library ($l4-C) (export) (import (chezscheme)) (export (import ($l4-A) ($l4-B))))
+    (equal? '(1 2) (let () (import ($l4-C)) (list a b))))
  )
 
 (mat library2
@@ -8716,6 +8729,295 @@
     (separate-eval '(revisit "testfile-l6-prog1.so"))
     "revisiting testfile-l6-prog1\n#((10 . 12))\n")
 )
+
+(mat library-regression
+  ; test that failing invoke code does not result in cyclic dependency problem on re-run
+  (equal?
+    (separate-eval
+      '(begin
+         (library (invoke-fail)
+           (export x)
+           (import (chezscheme))
+           (define x #f)
+           (error #f "failed to load library (invoke-fail)"))
+         (guard (e [else
+                     (guard (e2 [else 
+                                  (display-condition e) (newline)
+                                  (display-condition e2) (newline)])
+                       (eval 'x (environment '(chezscheme) '(invoke-fail))))])
+           (eval 'x (environment '(chezscheme) '(invoke-fail))))))
+    "Exception: failed to load library (invoke-fail)\nException: failed to load library (invoke-fail)\n")
+
+  ; test that true cyclic dependency will always report the same thing
+  (equal?
+    (separate-eval
+      '(begin
+         (library (invoke-cyclic)
+           (export x y)
+           (import (chezscheme))
+           (define x #f)
+           (define y (eval '(if x 5 10) (environment '(chezscheme) '(invoke-cyclic)))))
+         (guard (e [else
+                     (guard (e2 [else 
+                                  (display-condition e) (newline)
+                                  (display-condition e2) (newline)])
+                       (eval 'x (environment '(chezscheme) '(invoke-cyclic))))])
+           (eval 'x  (environment '(chezscheme) '(invoke-cyclic))))))
+    "Exception: cyclic dependency involving invocation of library (invoke-cyclic)\nException: cyclic dependency involving invocation of library (invoke-cyclic)\n")
+
+  (begin
+    ; library to help make it easier to cause a failure in the visit-code that
+    ; does not lead to failure during compilation of the file.
+    (with-output-to-file "testfile-lr-l1.ss"
+      (lambda ()
+        (pretty-print
+          '(library (testfile-lr-l1)
+             (export make-it-fail)
+             (import (chezscheme))
+             (define make-it-fail (make-parameter #f (lambda (x) (and x #t)))))))
+      'replace)
+    ; simple test to define one macro and potentially to raise an error when
+    ; defining the second one.
+    (with-output-to-file "testfile-lr-l2.ss"
+      (lambda ()
+        (pretty-print
+          '(library (testfile-lr-l2)
+             (export M1 M2)
+             (import (chezscheme) (testfile-lr-l1))
+             (define-syntax M1
+               (identifier-syntax #f))
+
+             (define-syntax M2
+               (if (make-it-fail)
+                   (error 'M2 "user requested failure with (make-it-fail) parameter")
+                   (lambda (x)
+                     (syntax-case x ()
+                       [(_ expr) #'expr])))))))
+      'replace)
+    ; more complete test that attempts to create the various types of things
+    ; that can be defined in visit code so that we can verify things are being
+    ; properly reset.
+    (with-output-to-file "testfile-lr-l3.ss"
+      (lambda ()
+        (pretty-print
+          '(library (testfile-lr-l3)
+             (export a b c d e f g h)
+             (import (chezscheme) (testfile-lr-l1))
+
+             (module a (x) (define x 5))
+             (alias b cons)
+             (define-syntax c (make-compile-time-value 5))
+             (define d 5)
+             (meta define e 5)
+             (define-syntax f (identifier-syntax #f))
+             (define $g (make-parameter #f))
+             (define-syntax g
+               (make-variable-transformer
+                 (lambda (x)
+                   (syntax-case x ()
+                     [(set! _ v) #'($g v)]
+                     [_ #'($g)]
+                     [(_ e* ...) #'(($g) e* ...)]))))
+             (define-property f g 10)
+             (define-syntax h
+               (if (make-it-fail)
+                   (error 'h "user requested failure with (make-it-fail) parameter")
+                   (lambda (x)
+                     (syntax-case x ()
+                       [(_ expr) #'expr])))))))
+      'replace)
+    (separate-compile
+      '(lambda (x)
+         (parameterize ([compile-imported-libraries #t])
+           (for-each compile-library x)))
+      '(list "testfile-lr-l1" "testfile-lr-l2" "testfile-lr-l3"))
+    #t)
+
+  (equal?
+    (separate-eval
+      '(begin
+         (import (testfile-lr-l2) (testfile-lr-l1))
+         (make-it-fail #t)
+         (guard (e [else
+                     (guard (e2
+                              [else
+                                (display-condition e) (newline)
+                                (display-condition e2) (newline)])
+                       (eval 'M1 (environment '(testfile-lr-l2))))])
+           (eval 'M1 (environment '(testfile-lr-l2))))))
+    "Exception in M2: user requested failure with (make-it-fail) parameter\nException in M2: user requested failure with (make-it-fail) parameter\n")
+
+  ; module is defined as part of import code, run time bindings are setup as part of invoke code
+  (equal?
+    (separate-eval
+      '(begin
+         (import (testfile-lr-l3) (testfile-lr-l1))
+         (make-it-fail #t)
+         (import a)
+         x))
+    "5\n")
+
+  ; alias is part of module binding ribcage, set up by import code
+  (equal?
+    (separate-eval
+      '(begin
+         (import (testfile-lr-l3) (testfile-lr-l1))
+         (make-it-fail #t)
+         (b 'a 'b)))
+    "(a . b)\n")
+
+  ; compile-time-value is set in visit code, should show same error each time it is referenced
+  (equal?
+    (separate-eval
+      '(begin
+         (library (lookup)
+           (export lookup)
+           (import (chezscheme))
+           (define-syntax lookup
+             (lambda (x)
+               (syntax-case x ()
+                 [(_ id) (lambda (rho) #`'#,(rho #'id))]
+                 [(_ id key) (lambda (rho) #`'#,(rho #'id #'key))]))))
+         (import (testfile-lr-l3) (testfile-lr-l1))
+         (make-it-fail #t)
+         (guard (e [else
+                     (guard (e2
+                              [else
+                                (display-condition e) (newline)
+                                (display-condition e2) (newline)])
+                       (eval '(lookup c) (environment '(testfile-lr-l3) '(lookup))))])
+           (eval '(lookup c) (environment '(testfile-lr-l3) '(lookup))))))
+    "Exception in h: user requested failure with (make-it-fail) parameter\nException in h: user requested failure with (make-it-fail) parameter\n")
+
+  ; defines are set up as part of invoke code
+  (equal?
+    (separate-eval
+      '(begin
+         (import (testfile-lr-l3) (testfile-lr-l1))
+         (make-it-fail #t)
+         d))
+    "5\n")
+
+  ; meta defines are set up as part of visit code
+  (equal?
+    (separate-eval
+      '(begin
+         (import (testfile-lr-l3) (testfile-lr-l1))
+         (make-it-fail #t)
+         (guard (e [else
+                     (guard (e2
+                              [else
+                                (display-condition e) (newline)
+                                (display-condition e2) (newline)])
+                       (eval '(let ()
+                                (define-syntax get-e
+                                  (lambda (x)
+                                    (syntax-case x ()
+                                      [(_) #`'#,e])))
+                                (get-e))
+                         (environment '(chezscheme) '(testfile-lr-l3))))])
+           (eval '(let ()
+                    (define-syntax get-e
+                      (lambda (x)
+                        (syntax-case x ()
+                          [(_) #`'#,e])))
+                    (get-e))
+             (environment '(chezscheme) '(testfile-lr-l3))))))
+    "Exception in h: user requested failure with (make-it-fail) parameter\nException in h: user requested failure with (make-it-fail) parameter\n")
+
+  ; macros are set up as part of visit code
+  (equal?
+    (separate-eval
+      '(begin
+         (import (testfile-lr-l3) (testfile-lr-l1))
+         (make-it-fail #t)
+         (guard (e [else
+                     (guard (e2
+                              [else
+                                (display-condition e) (newline)
+                                (display-condition e2) (newline)])
+                       (eval 'f (environment '(testfile-lr-l3))))])
+           (eval 'f (environment '(testfile-lr-l3))))))
+    "Exception in h: user requested failure with (make-it-fail) parameter\nException in h: user requested failure with (make-it-fail) parameter\n")
+
+  ; variable transformer macros are set up as part of visit code
+  (equal?
+    (separate-eval
+      '(begin
+         (import (testfile-lr-l3) (testfile-lr-l1))
+         (make-it-fail #t)
+         (guard (e [else
+                     (guard (e2
+                              [else
+                                (display-condition e) (newline)
+                                (display-condition e2) (newline)])
+                       (eval 'g (environment '(testfile-lr-l3))))])
+           (eval 'g (environment '(testfile-lr-l3))))))
+    "Exception in h: user requested failure with (make-it-fail) parameter\nException in h: user requested failure with (make-it-fail) parameter\n")
+
+  ; properties are setup as part of visit code.
+  (equal?
+    (separate-eval
+      '(begin
+         (library (lookup)
+           (export lookup)
+           (import (chezscheme))
+           (define-syntax lookup
+             (lambda (x)
+               (syntax-case x ()
+                 [(_ id) (lambda (rho) #`'#,(rho #'id))]
+                 [(_ id key) (lambda (rho) #`'#,(rho #'id #'key))]))))
+         (import (testfile-lr-l3) (testfile-lr-l1))
+         (make-it-fail #t)
+         (guard (e [else
+                     (guard (e2
+                              [else
+                                (display-condition e) (newline)
+                                (display-condition e2) (newline)])
+                       (eval '(lookup f g) (environment '(testfile-lr-l3) '(lookup))))])
+           (eval '(lookup f g) (environment '(testfile-lr-l3) '(lookup))))))
+    "Exception in h: user requested failure with (make-it-fail) parameter\nException in h: user requested failure with (make-it-fail) parameter\n")
+
+  ;; re-arm import code if it complains about a library that is not visible
+  (begin
+    (with-output-to-file "testfile-lr-l4.ss"
+      (lambda ()
+        (pretty-print
+         '(library (testfile-lr-l4)
+            (export x)
+            (import (chezscheme))
+            (define x 123))))
+      'replace)
+    (with-output-to-file "testfile-lr-p4.ss"
+      (lambda ()
+        (for-each pretty-print
+         '((import (testfile-lr-l4) (scheme))
+           (define (run args)
+             (guard (c [#t (display-condition c) (newline)])
+               (pretty-print (top-level-value (car args) (environment (cdr args))))))
+           (when (> x 0) ;; reference export
+             (let ([args (map string->symbol (command-line-arguments))])
+               (if (= (length args) 2)
+                   (begin
+                     (run args)
+                     (run args))
+                   (error #f "expected 2 args")))))))
+      'replace)
+    (separate-eval
+     '(parameterize ([compile-imported-libraries #t] [generate-wpo-files #t])
+        (compile-program "testfile-lr-p4.ss")
+        (compile-whole-program "testfile-lr-p4.wpo" "testfile-lr-p4-visible" #t)
+        (compile-whole-program "testfile-lr-p4.wpo" "testfile-lr-p4-not-visible" #f)))
+    (equal?
+     (separate-eval
+      '(parameterize ([command-line-arguments '("x" "testfile-lr-l4")])
+         (load-program "testfile-lr-p4-visible")
+         (load-program "testfile-lr-p4-not-visible")))
+     (string-append
+      "123\n"
+      "123\n"
+      "Exception in visit: library (testfile-lr-l4) is not visible\n"
+      "Exception in visit: library (testfile-lr-l4) is not visible\n"))))
 
 (mat cross-library-optimization
   (begin
@@ -10726,18 +11028,33 @@
     (make-source-object sfd -7 -3))
   (error? ; bfp -7 is not between 0 and efp 3
     (make-source-object sfd -7 3))
+  (error? ; bfp -7 is not between 0 and efp 3
+    (make-source-object sfd -7 3 2 1))
+  (error? ; one is not an exact integer
+    (make-source-object sfd 1 2 'one 1))
+  (error? ; one is not an exact integer
+    (make-source-object sfd 1 2 1 'one))
+  (error? ; zero is not an exact positive integer
+    (make-source-object sfd 1 2 0 1))
+  (error? ; zero is not an exact positive integer
+    (make-source-object sfd 1 2 1 0))
+  (error? ; bfp 3 is not between 0 and efp 2
+    (make-source-object sfd 3 2 1 1))
   (begin
     (define source (make-source-object sfd 2 3))
+    (define source-at-line-two (make-source-object sfd 3 5 2 1))
     #t)
   (error? ; source is not a source object
     (make-annotation #f 'source #f))
   (begin
     (define a (make-annotation '(if 3) source '(if I were a rich man)))
+    (define a-at-line-two (make-annotation '(if 3) source-at-line-two '(if I were a rich man)))
     (define x (datum->syntax #'* a))
     #t)
   (source-file-descriptor? sfd)
   (not (source-file-descriptor? source))
   (source-object? source)
+  (source-object? source-at-line-two)
   (not (source-object? sfd))
   (not (source-object? a))
   (annotation? a)
@@ -10752,6 +11069,10 @@
     (source-object-bfp a))
   (error? ; 3 is not a source object
     (source-object-efp 3))
+  (error? ; 3 is not a source object
+    (source-object-line 3))
+  (error? ; 3 is not a source object
+    (source-object-column 3))
   (error? ; 3 is not an annotation
     (annotation-expression 3))
   (error? ; #<source> is not an annotation
@@ -10777,6 +11098,13 @@
   (eq? (source-object-sfd source) sfd)
   (eq? (source-object-bfp source) 2)
   (eq? (source-object-efp source) 3)
+  (eq? (source-object-line source) #f)
+  (eq? (source-object-column source) #f)
+  (eq? (source-object-sfd source) sfd)
+  (eq? (source-object-bfp source-at-line-two) 3)
+  (eq? (source-object-efp source-at-line-two) 5)
+  (eq? (source-object-line source-at-line-two) 2)
+  (eq? (source-object-column source-at-line-two) 1)
   (equal? (annotation-expression a) '(if 3))
   (eq? (annotation-source a) source)
   (equal? (annotation-stripped a) '(if I were a rich man))
@@ -10802,12 +11130,20 @@
   (not (syntax->annotation #f))
   (error? ; invalid syntax (if I were a rich man) at char 2 of foo
     (expand a))
+  (error? ; invalid syntax (if I were a rich man) at line 2, char 1 of foo
+    (expand a-at-line-two))
   (error? ; invalid syntax (if I were a rich man) at char 2 of foo
     (eval a))
+  (error? ; invalid syntax (if I were a rich man) at char 2, char 1 of foo
+    (eval a-at-line-two))
   (error? ; invalid syntax (if I were a rich man) at char 2 of foo
     (eval '(let () (define-syntax foo (lambda (z) (datum->syntax #'* a))) foo)))
+  (error? ; invalid syntax (if I were a rich man) at line 2, char 1 of foo
+    (eval '(let () (define-syntax foo (lambda (z) (datum->syntax #'* a-at-line-two))) foo)))
   (error? ; invalid syntax (if I were a rich man) at char 2 of foo
     (eval '(let () (define-syntax foo (lambda (z) (datum->syntax #'* (make-annotation '(if 3) source '(if I were a rich man) (annotation-options debug profile))))) foo)))
+  (error? ; invalid syntax (if I were a rich man) at line 2, char 1 of foo
+    (eval '(let () (define-syntax foo (lambda (z) (datum->syntax #'* (make-annotation '(if 3) source-at-line-two '(if I were a rich man) (annotation-options debug profile))))) foo)))
   (error? ; invalid syntax (if I were a rich man) at char 2 of foo
     (eval '(let () (define-syntax foo (lambda (z) (datum->syntax #'* (make-annotation '(if 3) source '(if I were a rich man) (annotation-options debug))))) foo)))
   (error? ; invalid syntax (if I were a rich man)
@@ -10816,6 +11152,8 @@
     (eval '(let () (define-syntax foo (lambda (z) (datum->syntax #'* (make-annotation '(if 3) source '(if I were a rich man) (annotation-options))))) foo)))
   (error? ; invalid argument count in call (f) at char 2 of foo
     (eval '(let () (define-syntax foo (lambda (z) (datum->syntax #'* `(let ([f (lambda (x) x)]) ,(make-annotation '(f) source '(f) (annotation-options debug profile)))))) foo)))
+  (error? ; invalid argument count in call (f) at line 2, char 1 of foo
+    (eval '(let () (define-syntax foo (lambda (z) (datum->syntax #'* `(let ([f (lambda (x) x)]) ,(make-annotation '(f) source-at-line-two '(f) (annotation-options debug profile)))))) foo)))
   (error? ; invalid argument count in call (f) at char 2 of foo
     (eval '(let () (define-syntax foo (lambda (z) (datum->syntax #'* `(let ([f (lambda (x) x)]) ,(make-annotation '(f) source '(f) (annotation-options debug)))))) foo)))
   (error? ; invalid argument count in call (f)
@@ -10939,7 +11277,185 @@
                        (call-with-values (lambda () (locate-source (source-object-sfd source) (source-object-efp source))) vector)))])
           (load "testfile.ss"))))
     '(#("testfile.ss" 2 12) . #("testfile.ss" 2 13)))
+
+  (error? ; not a source object
+   (locate-source-object-source "spam" #t #t))
+  (error?
+   (current-locate-source-object-source 7))
+  (error?
+   (current-locate-source-object-source "string"))
+  (error? ; not a source object
+   ((current-locate-source-object-source) "spam" #t #t))
+  (error? ; invalid syntax (if I were a rich man) at line 200, char 17 of foo
+   (parameterize ([current-locate-source-object-source
+                   (lambda (src start? cache?)
+                     (values (source-file-descriptor-path (source-object-sfd src)) 200 17))])
+     (expand a)))
  )
+
+(mat annotations-via-recorded-lines
+  (error?
+   (current-make-source-object 7))
+  (error?
+   (current-make-source-object "string"))
+  (begin
+    (define sfd-with-lines
+      (let ((op (open-output-file "testfile.ss" 'replace)))
+        (display "apple\n  banana\ncoconut" op)
+        (close-port op)
+        (let* ([ip (open-file-input-port "testfile.ss")]
+               [sfd (make-source-file-descriptor "testfile.ss" ip)])
+          (close-port ip)
+          sfd)))
+    (define input-string-with-lines "Apple\n  Banana\nCoconut\nMore")
+    (define input-port-with-lines (open-string-input-port input-string-with-lines))
+    (define input-port-with-line-pos 0)
+    (define (make-make-source-object/get-lines expected-sfd)
+      (lambda (sfd bfp efp)
+        (if (eq? sfd expected-sfd)
+            ;; Gather line and column now:
+            (let-values ([(path line col) (locate-source sfd bfp #t)])
+              (make-source-object sfd bfp efp line col))
+            (error 'recording-make-source-object "reading some other file?"))))
+    (define (read-with-lines)
+      (parameterize ([current-make-source-object (make-make-source-object/get-lines sfd-with-lines)])
+        (let-values ([(v pos) (get-datum/annotations input-port-with-lines sfd-with-lines input-port-with-line-pos)])
+          (set! input-port-with-line-pos pos)
+          v)))
+    #t)
+  (begin
+    (define line-one (read-with-lines))
+    (annotation? line-one))
+  (equal? (annotation-stripped line-one) 'Apple)
+  (equal? (source-object-bfp (annotation-source line-one)) 0)
+  (equal? (source-object-line (annotation-source line-one)) 1)
+  (equal? (source-object-column (annotation-source line-one)) 1)
+  (begin
+    (define line-two (read-with-lines))
+    (annotation? line-two))
+  (equal? (source-object-bfp (annotation-source line-two)) 8)
+  (equal? (source-object-line (annotation-source line-two)) 2)
+  (equal? (source-object-column (annotation-source line-two)) 3)
+  (begin
+    (define line-three (read-with-lines))
+    (annotation? line-three))
+  (equal? (source-object-bfp (annotation-source line-three)) 15)
+  (equal? (source-object-line (annotation-source line-three)) 3)
+  (equal? (source-object-column (annotation-source line-three)) 1)
+  (annotation? (read-with-lines)) ; 'More
+  (eof-object? (read-with-lines))
+
+  ;; Make sure lines are calculated right with input that is longer than
+  ;; the file buffer size:
+  (begin
+    (define input-string-with-lines (string-append
+                                     "\""
+                                     (make-string (* 2 (file-buffer-size)) #\a)
+                                     "\""
+                                     "\nend"))
+    
+    (define input-port-with-lines (open-string-input-port input-string-with-lines))
+    (define sfd-with-lines
+      (let ((op (open-output-file "testfile.ss" 'replace)))
+        (display input-string-with-lines op)
+        (close-port op)
+        (let* ([ip (open-file-input-port "testfile.ss")]
+               [sfd (make-source-file-descriptor "testfile.ss" ip)])
+          (close-port ip)
+          sfd)))
+    (define input-port-with-line-pos 0)
+    (define (read-with-lines)
+      (parameterize ([current-make-source-object (make-make-source-object/get-lines sfd-with-lines)])
+        (let-values ([(v pos) (get-datum/annotations input-port-with-lines sfd-with-lines input-port-with-line-pos)])
+          (set! input-port-with-line-pos pos)
+          v)))
+    (define line-one (read-with-lines))
+    (annotation? line-one))
+  (string? (annotation-stripped line-one))
+  (begin
+    (define line-two (read-with-lines))
+    (annotation? line-two))
+  (equal? (source-object-line (annotation-source line-two)) 2)
+  (equal? (source-object-column (annotation-source line-two)) 1)
+  )
+
+(mat locate-source-caching
+  (begin
+   (define (make-expr n)
+     `(let ()
+        ,@(let loop ([i n])
+            (if (zero? i)
+                '(#t)
+                (cons
+                 `(let-values ([(x y z) (values 1 2 3)]) x)
+                 (loop (sub1 i)))))))
+
+   (define (time-expr n)
+     (with-output-to-file "testfile.ss"
+       (lambda ()
+         (pretty-print (make-expr n)))
+       'truncate)
+     (collect)
+     (parameterize ([collect-request-handler void])
+       (let ([start (current-time)])
+         (load "testfile.ss" expand)
+         (let ([delta (time-difference (current-time) start)])
+           (+ (* #e1e9 (time-second delta))
+              (time-nanosecond delta))))))
+
+   (let loop ([tries 3])
+     (when (zero? tries)
+       (error 'source-cache-test "loading lots of `let-values` forms seems to take too long"))
+     (let ([t1000 (time-expr 1000)] [t10000 (time-expr 10000)])
+       (or (> (* 20 t1000) t10000)
+         (begin
+           (printf "t1000 = ~s, t10000 = ~s, t10000 / t1000 = ~s\n" t1000 t10000 (inexact (/ t10000 t1000)))
+           (loop (sub1 tries)))))))
+
+  (begin
+    (define sfd-to-cache
+      (let ((op (open-output-file "testfile.ss" 'replace)))
+        (display "apple\n  banana\ncoconut" op)
+        (close-port op)
+        (let* ([ip (open-file-input-port "testfile.ss")]
+               [sfd (make-source-file-descriptor "testfile.ss" ip)])
+          (close-port ip)
+          sfd)))
+
+    (equal? (call-with-values
+             (lambda () (locate-source sfd-to-cache 8 #t))
+             (case-lambda
+              [(name line col) (list line col)]))
+            '(2 3)))
+
+  (begin
+    (let ((op (open-output-file "testfile.ss" 'replace)))
+      (display "1\n2\n3\n4\n5\n6789" op)
+      (close-port op))
+    ;; Cache may report the old source line,
+    ;; or uncached should report no line:
+    (equal? (call-with-values
+             (lambda () (locate-source sfd-to-cache 8 #t))
+             (case-lambda
+              [() '(2 3)] ; report no line same as expected cache
+              [(name line col) (list line col)]))
+            '(2 3)))
+
+  ;; An uncached lookup defniitely reports no line:
+  (equal? (call-with-values
+            (lambda () (locate-source sfd-to-cache 8 #f))
+            (lambda () 'none))
+          'none)
+
+  (begin
+    (collect (collect-maximum-generation))
+    ;; After collecting the maximum generation, the
+    ;; cached information shoould definitely be gone:
+    (equal? (call-with-values
+             (lambda () (locate-source sfd-to-cache 8 #t))
+             (lambda () 'gone))
+            'gone))
+  )
 
 (mat include
   (error? ; invalid syntax

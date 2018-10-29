@@ -1,5 +1,5 @@
 ;;; bytevector.ms
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -203,19 +203,33 @@
 )
 
 (mat $bytevector-ref-check?
-  (let ([bv (make-bytevector 3)] [not-bv (make-fxvector 3)])
+  (let ([bv (make-bytevector 3)] [imm-bv (bytevector->immutable-bytevector (make-bytevector 3))] [not-bv (make-fxvector 3)])
     (let ([i-1 -1] [i0 0] [i1 1] [i2 2] [i3 3] [ifalse #f] [ibig (+ (most-positive-fixnum) 1)])
       (and
         (not (#%$bytevector-ref-check? 8 not-bv i0))
         (not (#%$bytevector-ref-check? 8 bv ifalse))
         (not (#%$bytevector-ref-check? 8 bv i-1))
+        (not (#%$bytevector-ref-check? 8 imm-bv i-1))
+        (#%$bytevector-ref-check? 8 bv 0)
+        (#%$bytevector-ref-check? 8 bv 1)
+        (#%$bytevector-ref-check? 8 bv 2)
+        (#%$bytevector-ref-check? 8 imm-bv 0)
+        (#%$bytevector-ref-check? 8 imm-bv 1)
+        (#%$bytevector-ref-check? 8 imm-bv 2)
         (#%$bytevector-ref-check? 8 bv i0)
         (#%$bytevector-ref-check? 8 bv i1)
         (#%$bytevector-ref-check? 8 bv i2)
+        (#%$bytevector-ref-check? 8 imm-bv i0)
+        (#%$bytevector-ref-check? 8 imm-bv i1)
+        (#%$bytevector-ref-check? 8 imm-bv i2)
+        (not (#%$bytevector-ref-check? 8 bv 3))
         (not (#%$bytevector-ref-check? 8 bv i3))
-        (not (#%$bytevector-ref-check? 8 bv ibig)))))
+        (not (#%$bytevector-ref-check? 8 bv ibig))
+        (not (#%$bytevector-ref-check? 8 imm-bv 3))
+        (not (#%$bytevector-ref-check? 8 imm-bv i3))
+        (not (#%$bytevector-ref-check? 8 imm-bv ibig)))))
   (let ([n 128])
-    (let ([bv (make-bytevector n)] [not-bv (make-fxvector n)])
+    (let ([bv (make-bytevector n)] [imm-bv (bytevector->immutable-bytevector (make-bytevector n))] [not-bv (make-fxvector n)])
       (and
         (let ([i 0])
           (and (not (#%$bytevector-ref-check? 8 not-bv i))
@@ -228,30 +242,48 @@
                    (not (#%$bytevector-ref-check? 16 bv i))
                    (not (#%$bytevector-ref-check? 32 bv i))
                    (not (#%$bytevector-ref-check? 64 bv i))
+                   (not (#%$bytevector-ref-check? 8 imm-bv i))
+                   (not (#%$bytevector-ref-check? 16 imm-bv i))
+                   (not (#%$bytevector-ref-check? 32 imm-bv i))
+                   (not (#%$bytevector-ref-check? 64 imm-bv i))
                    (f (fx* i 2)))))
         (let f ([i 0])
           (or (fx= i n)
               (and (#%$bytevector-ref-check? 8 bv i)
                    (if (and (fx= (modulo i 2) 0) (fx<= (fx+ i 2) n))
-                       (#%$bytevector-ref-check? 16 bv i)
-                       (not (#%$bytevector-ref-check? 16 bv i)))
+                       (and (#%$bytevector-ref-check? 16 bv i)
+                            (#%$bytevector-ref-check? 16 imm-bv i))
+                       (not (or (#%$bytevector-ref-check? 16 bv i)
+                                (#%$bytevector-ref-check? 16 imm-bv i))))
                    (if (and (fx= (modulo i 4) 0) (fx<= (fx+ i 4) n))
-                       (#%$bytevector-ref-check? 32 bv i)
-                       (not (#%$bytevector-ref-check? 32 bv i)))
+                       (and (#%$bytevector-ref-check? 32 bv i)
+                            (#%$bytevector-ref-check? 32 imm-bv i))
+                       (not (or (#%$bytevector-ref-check? 32 bv i)
+                                (#%$bytevector-ref-check? 32 imm-bv i))))
                    (if (and (fx= (modulo i 8) 0) (fx<= (fx+ i 8) n))
-                       (#%$bytevector-ref-check? 64 bv i)
-                       (not (#%$bytevector-ref-check? 64 bv i)))
+                       (and (#%$bytevector-ref-check? 64 bv i)
+                            (#%$bytevector-ref-check? 64 imm-bv i))
+                       (not (or (#%$bytevector-ref-check? 64 bv i)
+                                (#%$bytevector-ref-check? 64 imm-bv i))))
                    (f (fx+ i 1)))))
         (let ([i n])
-          (not (#%$bytevector-ref-check? 8 bv i))
-          (not (#%$bytevector-ref-check? 16 bv i))
-          (not (#%$bytevector-ref-check? 32 bv i))
-          (not (#%$bytevector-ref-check? 64 bv i)))
+          (and (not (#%$bytevector-ref-check? 8 bv i))
+               (not (#%$bytevector-ref-check? 16 bv i))
+               (not (#%$bytevector-ref-check? 32 bv i))
+               (not (#%$bytevector-ref-check? 64 bv i))
+               (not (#%$bytevector-ref-check? 8 imm-bv i))
+               (not (#%$bytevector-ref-check? 16 imm-bv i))
+               (not (#%$bytevector-ref-check? 32 imm-bv i))
+               (not (#%$bytevector-ref-check? 64 imm-bv i))))
         (let ([i (+ (most-positive-fixnum) 1)])
-          (not (#%$bytevector-ref-check? 8 bv i))
-          (not (#%$bytevector-ref-check? 16 bv i))
-          (not (#%$bytevector-ref-check? 32 bv i))
-          (not (#%$bytevector-ref-check? 64 bv i))))))
+          (and (not (#%$bytevector-ref-check? 8 bv i))
+               (not (#%$bytevector-ref-check? 16 bv i))
+               (not (#%$bytevector-ref-check? 32 bv i))
+               (not (#%$bytevector-ref-check? 64 bv i))
+               (not (#%$bytevector-ref-check? 8 imm-bv i))
+               (not (#%$bytevector-ref-check? 16 imm-bv i))
+               (not (#%$bytevector-ref-check? 32 imm-bv i))
+               (not (#%$bytevector-ref-check? 64 imm-bv i)))))))
 )
 
 (mat bytevector-s8-ref
@@ -10922,4 +10954,134 @@
         (unless (equal? (bytevector-xor bv1 bv1)
                         ($bytevector-xor bv1 bv1))
           (errorf #f "bytevector-xor failed on ~s and ~s" bv1 bv1)))))
+)
+
+(mat bytevector->immutable-bytevector
+    (begin
+      (define immutable-100-bytevector
+        (bytevector->immutable-bytevector (make-bytevector 100 42)))
+      #t)
+    
+    (immutable-bytevector? immutable-100-bytevector)
+    (not (mutable-bytevector? immutable-100-bytevector))
+    
+    (equal? (make-bytevector 100 42) immutable-100-bytevector)
+    (eq? immutable-100-bytevector
+         (bytevector->immutable-bytevector immutable-100-bytevector))
+    
+    (not (immutable-bytevector? (make-bytevector 5)))
+    (mutable-bytevector? (make-bytevector 5))
+    
+    (immutable-bytevector? (bytevector->immutable-bytevector (bytevector)))
+    (not (mutable-bytevector? (bytevector->immutable-bytevector (bytevector))))
+    (not (immutable-bytevector? (bytevector)))
+    (mutable-bytevector? (bytevector))
+    
+    (not (immutable-bytevector? (bytevector-copy immutable-100-bytevector)))
+
+    ;; Make sure `...set!` functions check for mutability:
+    (error? (bytevector-uint-set! immutable-100-bytevector 0 1 (endianness big) 4))
+    (error? (bytevector-sint-set! immutable-100-bytevector 0 1 (endianness big) 4))
+    (error? (bytevector-u8-set! immutable-100-bytevector 0 1))
+    (error? (bytevector-s8-set! immutable-100-bytevector 0 1))
+    (error? (bytevector-u16-set! immutable-100-bytevector 0 1 (endianness big)))
+    (error? (bytevector-s16-set! immutable-100-bytevector 0 1 (endianness big)))
+    (error? (bytevector-u16-native-set! immutable-100-bytevector 0 1))
+    (error? (bytevector-s16-native-set! immutable-100-bytevector 0 1))
+    (error? (bytevector-u24-set! immutable-100-bytevector 0 1 (endianness big)))
+    (error? (bytevector-s24-set! immutable-100-bytevector 0 1 (endianness big)))
+    (error? (bytevector-u32-set! immutable-100-bytevector 0 1 (endianness big)))
+    (error? (bytevector-s32-set! immutable-100-bytevector 0 1 (endianness big)))
+    (error? (bytevector-u32-native-set! immutable-100-bytevector 0 1))
+    (error? (bytevector-s32-native-set! immutable-100-bytevector 0 1))
+    (error? (bytevector-u40-set! immutable-100-bytevector 0 1 (endianness big)))
+    (error? (bytevector-s40-set! immutable-100-bytevector 0 1 (endianness big)))
+    (error? (bytevector-u48-set! immutable-100-bytevector 0 1 (endianness big)))
+    (error? (bytevector-s48-set! immutable-100-bytevector 0 1 (endianness big)))
+    (error? (bytevector-u56-set! immutable-100-bytevector 0 1 (endianness big)))
+    (error? (bytevector-s56-set! immutable-100-bytevector 0 1 (endianness big)))
+    (error? (bytevector-u64-set! immutable-100-bytevector 0 1 (endianness big)))
+    (error? (bytevector-s64-set! immutable-100-bytevector 0 1 (endianness big)))
+    (error? (bytevector-u64-native-set! immutable-100-bytevector 0 1))
+    (error? (bytevector-s64-native-set! immutable-100-bytevector 0 1))
+    (error? (bytevector-ieee-single-set! immutable-100-bytevector 0 1.0 (endianness big)))
+    (error? (bytevector-ieee-double-set! immutable-100-bytevector 0 1.0 (endianness big)))
+    (error? (bytevector-ieee-single-native-set! immutable-100-bytevector 0 1.0))
+    (error? (bytevector-ieee-double-native-set! immutable-100-bytevector 0 1.0))
+    
+    (error? (bytevector-fill! immutable-100-bytevector 0))
+    (error? (bytevector-copy! '#vu8(4 5 6) 0 immutable-100-bytevector 0 3))
+    (error? (bytevector-truncate! immutable-100-bytevector 1))
+
+    ;; Make sure `...ref!` functions *don't* accidentally check for mutability:
+    (number? (bytevector-uint-ref immutable-100-bytevector 0 (endianness big) 4))
+    (number? (bytevector-sint-ref immutable-100-bytevector 0 (endianness big) 4))
+    (number? (bytevector-u8-ref immutable-100-bytevector 0))
+    (number? (bytevector-s8-ref immutable-100-bytevector 0))
+    (number? (bytevector-u16-ref immutable-100-bytevector 0 (endianness big)))
+    (number? (bytevector-s16-ref immutable-100-bytevector 0 (endianness big)))
+    (number? (bytevector-u16-native-ref immutable-100-bytevector 0))
+    (number? (bytevector-s16-native-ref immutable-100-bytevector 0))
+    (number? (bytevector-u24-ref immutable-100-bytevector 0 (endianness big)))
+    (number? (bytevector-s24-ref immutable-100-bytevector 0 (endianness big)))
+    (number? (bytevector-u32-ref immutable-100-bytevector 0 (endianness big)))
+    (number? (bytevector-s32-ref immutable-100-bytevector 0 (endianness big)))
+    (number? (bytevector-u32-native-ref immutable-100-bytevector 0))
+    (number? (bytevector-s32-native-ref immutable-100-bytevector 0))
+    (number? (bytevector-u40-ref immutable-100-bytevector 0 (endianness big)))
+    (number? (bytevector-s40-ref immutable-100-bytevector 0 (endianness big)))
+    (number? (bytevector-u48-ref immutable-100-bytevector 0 (endianness big)))
+    (number? (bytevector-s48-ref immutable-100-bytevector 0 (endianness big)))
+    (number? (bytevector-u56-ref immutable-100-bytevector 0 (endianness big)))
+    (number? (bytevector-s56-ref immutable-100-bytevector 0 (endianness big)))
+    (number? (bytevector-u64-ref immutable-100-bytevector 0 (endianness big)))
+    (number? (bytevector-s64-ref immutable-100-bytevector 0 (endianness big)))
+    (number? (bytevector-u64-native-ref immutable-100-bytevector 0))
+    (number? (bytevector-s64-native-ref immutable-100-bytevector 0))
+    (number? (bytevector-ieee-single-ref immutable-100-bytevector 0 (endianness big)))
+    (number? (bytevector-ieee-double-ref immutable-100-bytevector 0 (endianness big)))
+    (number? (bytevector-ieee-single-native-ref immutable-100-bytevector 0))
+    (number? (bytevector-ieee-double-native-ref immutable-100-bytevector 0))
+)
+
+
+(mat bytevector-compress
+    (error? (bytevector-compress 7))
+    (error? (bytevector-compress "hello"))
+    (error? (bytevector-uncompress 7))
+    (error? (bytevector-uncompress "hello"))
+    (begin
+      (define (round-trip-bytevector-compress bv)
+        (equal? (bytevector-uncompress (bytevector-compress bv))
+                bv))
+      (round-trip-bytevector-compress (string->utf8 "hello")))
+    (round-trip-bytevector-compress '#vu8())
+    (round-trip-bytevector-compress (apply bytevector
+                                           (let loop ([i 0])
+                                             (if (= i 4096)
+                                                 '()
+                                                 (cons (bitwise-and i 255)
+                                                       (loop (+ i 1)))))))
+    (error?
+     ;; Need at least 8 bytes for result size
+     (bytevector-uncompress '#vu8()))
+    (error?
+     ;; Need at least 8 bytes for result size
+     (bytevector-uncompress '#vu8(0 0 0 0 0 0 255)))
+    (error?
+     ;; Fail if the uncompressed result is too big
+     (bytevector-uncompress (let ([bv (bytevector-compress (string->utf8 "hello"))])
+                              (bytevector-u64-set! bv 0 (sub1 (bytevector-u64-ref bv 0 (endianness big))) (endianness big))
+                              bv)))
+    (error?
+     ;; Fail if the uncompressed result is too small
+     (bytevector-uncompress (let ([bv (bytevector-compress (string->utf8 "hello"))])
+                              (bytevector-u64-set! bv 0 (add1 (bytevector-u64-ref bv 0 (endianness big)))  (endianness big))
+                              bv)))
+    (error?
+     ;; Compressed data always starts with 0x78, so this one isn't valid:
+     (bytevector-uncompress '#vu8(0 0 0 0 0 0 0 255 1 2 3)))
+    (error?
+     ;; Claming a too-large size in the header should fail with a suitable message:
+     (bytevector-uncompress '#vu8(255 255 255 255 255 255 255 255 1 2 3)))
 )

@@ -1,5 +1,5 @@
 ;;; x86_64.ss
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@
       [%xp  %r12           #t 12]
       [%ts  %rax %Cretval  #f  0]
       [%td  %rbx           #t  3]
-      [%ac1 %r10           #f 10]
+      [%ac1 %r10 %deact    #f 10]
       [%yp  %r11           #f 11]
       [%cp  %r15           #t 15]
       [#;%ret %rsi           #t  6]
@@ -57,7 +57,7 @@
       [%xp  %r12           #t 12]
       [%ts  %rax %Cretval  #f  0]
       [%td  %rbx           #t  3]
-      [%ac1 %r10           #f 10]
+      [%ac1 %r10 %deact    #f 10]
       [%yp  %r11           #f 11]
       [%cp  %r15           #t 15]
       [#;%ret %r8  %Carg5    #f  8]
@@ -794,6 +794,11 @@
     [(op (x ur) (y ur) (z imm32))
      `(asm ,info ,(asm-fl-load op (info-loadfl-flreg info)) ,x ,y ,z)])
 
+  (define-instruction value (get-double)
+    [(op (z ur))
+     `(set! ,(make-live-info) ,z
+        (asm ,info ,(asm-get-double (info-loadfl-flreg info))))])
+
   (define-instruction effect (flt)
     [(op (x mem ur) (y ur)) `(asm ,info ,asm-flt ,x ,y)])
 
@@ -818,6 +823,20 @@
      ; as the jump temp (rax is assumed by linker's x86_64_set_jump)
      (safe-assert (eq? z %rax))
      `(set! ,(make-live-info) ,z (asm ,info ,asm-get-tc))])
+
+  (define-instruction value activate-thread
+    [(op (z ur))
+     (safe-assert (eq? z %rax)) ; see get-tc
+     `(set! ,(make-live-info) ,z (asm ,info ,asm-activate-thread))])
+
+  (define-instruction effect deactivate-thread
+    [(op)
+     `(asm ,info ,asm-deactivate-thread)])
+
+  (define-instruction effect unactivate-thread
+    [(op (x ur))
+     (safe-assert (eq? x %Carg1))
+     `(asm ,info ,asm-unactivate-thread ,x)])
 
   ; TODO: risc architectures will have to take info-asmlib-save-ra? into account
   (define-instruction value asmlibcall
@@ -920,6 +939,15 @@
     [(op (x ur) (y ur) (w imm32))
      `(asm ,info ,asm-locked-decr ,x ,y ,w)])
 
+  (define-instruction effect (cas)
+    [(op (x ur) (y ur) (w imm32) (old ur) (new ur))
+     (let ([urax (make-precolored-unspillable 'urax %rax)])
+       (with-output-language (L15d Effect)
+         (seq
+           `(set! ,(make-live-info) ,urax ,old)
+           ;; NB: may modify %rax:
+           `(asm ,info ,asm-locked-cmpxchg ,x ,y ,w ,urax ,new))))])
+
   (define-instruction effect (pause)
     [(op) `(asm ,info ,asm-pause)])
 
@@ -970,16 +998,16 @@
                      asm-direct-jump asm-return-address asm-jump asm-conditional-jump asm-data-label asm-rp-header
                      asm-lea1 asm-lea2 asm-indirect-call asm-condition-code
                      asm-fl-cvt asm-fl-store asm-fl-load asm-flt asm-trunc asm-div
-                     asm-exchange asm-pause asm-locked-incr asm-locked-decr
+                     asm-exchange asm-pause asm-locked-incr asm-locked-decr asm-locked-cmpxchg
                      asm-flop-2 asm-flsqrt asm-c-simple-call
-                     asm-save-flrv asm-restore-flrv asm-return asm-size
+                     asm-save-flrv asm-restore-flrv asm-return asm-c-return asm-size
                      asm-enter asm-foreign-call asm-foreign-callable
                      asm-inc-profile-counter
                      asm-inc-cc-counter asm-read-time-stamp-counter asm-read-performance-monitoring-counter
                      ; threaded version specific
-                     asm-get-tc
+                     asm-get-tc asm-activate-thread asm-deactivate-thread asm-unactivate-thread
                      ; machine dependent exports
-                     asm-sext-rax->rdx asm-store-single->double asm-kill)
+                     asm-sext-rax->rdx asm-store-single->double asm-kill asm-get-double)
 
   (define ax-register?
     (case-lambda
@@ -1107,6 +1135,8 @@
 
   (define-op locked-dec (#;b *) locked-unary-op #b1111111 #b001)
   (define-op locked-inc (#;b *) locked-unary-op #b1111111 #b000)
+
+  (define-op locked-cmpxchg (*) locked-cmpxchg-op)
 
   ; also do inc-reg dec-reg
 
@@ -1250,6 +1280,21 @@
         (ax-ea-modrm-ttt dest-ea ttt-code)
         (ax-ea-sib dest-ea)
         (ax-ea-addr-disp dest-ea))))
+
+  (define locked-cmpxchg-op
+    (lambda (op size dest-ea new-reg code*)
+      (begin
+        (emit-code (op dest-ea new-reg code*)
+          (build byte #xf0) ; lock prefix
+          (ax-ea-rex (if (eq? size 'quad) 1 0) dest-ea new-reg size)
+          (build byte #x0f)
+          (build byte
+            (byte-fields
+              [1 #b1011000]
+              [0 (ax-size-code size)]))
+          (ax-ea-modrm-reg dest-ea new-reg)
+          (ax-ea-sib dest-ea)
+          (ax-ea-addr-disp dest-ea)))))
 
   (define pushi-op
     (lambda (op imm-ea code*)
@@ -1781,6 +1826,11 @@
             [(load-single) (emit sse.movss src (cons 'reg flreg) code*)]
             [(load-double) (emit sse.movsd src (cons 'reg flreg) code*)])))))
 
+  (define asm-get-double
+    (lambda (flreg)
+      (lambda (code* dst)
+        (emit sse.movd (cons 'reg flreg) (cons 'reg dst) code*))))
+
   (define asm-flt
     (lambda (code* src flonumreg)
       (Trivit (src)
@@ -1981,6 +2031,10 @@
       (emit addi '(imm 8) (cons 'reg %sp)
         (emit ret '()))))
 
+  (define asm-c-return
+    (lambda (info)
+      (emit ret '())))
+
   (define asm-locked-incr
     (lambda (code* base index offset)
       (let ([dest (build-mem-opnd base index offset)])
@@ -1990,6 +2044,11 @@
     (lambda (code* base index offset)
       (let ([dest (build-mem-opnd base index offset)])
         (emit locked-dec dest code*))))
+
+  (define asm-locked-cmpxchg
+    (lambda (code* base index offset old-v new-v)
+      (let ([dest (build-mem-opnd base index offset)])
+        (emit locked-cmpxchg dest (cons 'reg new-v) code*))))
 
   (define asm-pause
     (lambda (code*)
@@ -2205,6 +2264,21 @@
       (lambda (code* jmp-reg) ; dest is ignored, since it is always the first C argument (rax in this case)
         (asm-helper-call code* target jmp-reg))))
 
+  (define asm-activate-thread
+    (let ([target `(x86_64-call 0 (entry ,(lookup-c-entry activate-thread)))])
+      (lambda (code* jmp-reg)
+        (asm-helper-call code* target jmp-reg))))
+
+  (define asm-deactivate-thread
+    (let ([target `(x86_64-call 0 (entry ,(lookup-c-entry deactivate-thread)))])
+      (lambda (code*)
+        (asm-helper-call code* target %rax))))
+
+  (define asm-unactivate-thread
+    (let ([target `(x86_64-call 0 (entry ,(lookup-c-entry unactivate-thread)))])
+      (lambda (code* arg-reg)
+        (asm-helper-call code* target %rax))))
+
   (define asm-indirect-call
     (lambda (code* t . ignore)
       ; NB: c-call is already required to be a register or memory operand, so
@@ -2398,6 +2472,134 @@
         (define make-vint (lambda () (vector %Carg1 %Carg2 %Carg3 %Carg4 %Carg5 %Carg6)))
         (define make-vfp (lambda () (vector %Cfparg1 %Cfparg2 %Cfparg3 %Cfparg4 %Cfparg5 %Cfparg6 %Cfparg7 %Cfparg8)))))
 
+    (define (align n size)
+      (fxlogand (fx+ n (fx- size 1)) (fx- size)))
+
+    (define (classify-type type)
+      (nanopass-case (Ltype Type) type
+        [(fp-ftd& ,ftd) (classify-eightbytes ftd)]
+        [else #f]))
+
+    (define (classified-size type)
+      (nanopass-case (Ltype Type) type
+        [(fp-ftd& ,ftd) ($ftd-size ftd)]
+        [else #f]))
+
+    ;; classify-eightbytes: returns '(memory) or a nonemtpy list of 'integer/'sse
+    (if-feature windows
+      ;; Windows: either passed in one register or not
+      (define (classify-eightbytes ftd)
+	(cond
+	 [($ftd-compound? ftd)
+	  (if (memv ($ftd-size ftd) '(1 2 4 8))
+	      '(integer)
+	      '(memory))]
+	 [(eq? 'float (caar ($ftd->members ftd)))
+	  '(sse)]
+	 [else '(integer)]))
+      ;; Non-Windows: SYSV ABI is a more general classification of
+      ;; 8-byte segments into 'integer, 'sse, or 'memory modes
+      (define (classify-eightbytes ftd)
+	(define (merge t1 t2)
+	  (cond
+	   [(eq? t1 t2) t1]
+	   [(eq? t1 'no-class) t2]
+	   [(eq? t2 'no-class) t1]
+	   [(eq? t1 'memory) 'memory]
+	   [(eq? t2 'memory) 'memory]
+	   [else 'integer]))
+	(cond
+	 [(or (> ($ftd-size ftd) 16) ; more than 2 eightbytes => passed in memory
+	      (fx= 0 ($ftd-size ftd)))
+	  '(memory)]
+	 [else
+	  (let ([classes (make-vector (fxsrl (align ($ftd-size ftd) 8) 3) 'no-class)])
+	    (let loop ([mbrs ($ftd->members ftd)])
+	      (cond
+	       [(null? mbrs)
+		(vector->list classes)]
+	       [else
+		(let ([kind (caar mbrs)]
+		      [size (cadar mbrs)]
+		      [offset (caddar mbrs)])
+		  (cond
+		   [(not (fx= offset (align offset size)))
+		    ;; misaligned
+		    '(memory)]
+		   [else
+		    (let* ([pos (fxsrl offset 3)]
+			   [class (vector-ref classes pos)]
+			   [new-class (merge class (if (eq? kind 'float) 'sse 'integer))])
+		      (cond
+		       [(eq? new-class 'memory)
+			'(memory)]
+		       [else
+			(vector-set! classes pos new-class)
+			(loop (cdr mbrs))]))]))])))])))
+
+    (define (count v l)
+      (cond
+       [(null? l) 0]
+       [(eq? (car l) v) (fx+ 1 (count v (cdr l)))]
+       [else (count v (cdr l))]))
+
+    ;; A result is put in registers if it has up to two
+    ;; eightbytes, each 'integer or 'sse. On Windows,
+    ;; `result-classes` always has only one item.
+    (define (result-fits-in-registers? result-classes)
+      (and result-classes
+           (not (eq? 'memory (car result-classes)))
+           (or (null? (cdr result-classes))
+               (null? (cddr result-classes)))))
+
+    ;; An argument is put in registeres depending on how many
+    ;; registers are left
+    (define (pass-here-by-stack? classes iint ints ifp fps)
+      (or (eq? 'memory (car classes))
+          (fx> (fx+ iint ints) 6)
+          (fx> (fx+ ifp fps) 8)))
+
+    (module (push-registers pop-registers push-registers-size)
+      (define (move-registers regs load?)
+        (define vfp (make-vfp))
+        (define (fp-reg? reg)
+          (let loop ([i (fx- (vector-length vfp) 1)])
+            (or (eq? reg (vector-ref vfp i))
+                (and (fx> i 0) (loop (fx- i 1))))))
+        (with-output-language (L13 Effect)
+          (let loop ([regs regs] [offset 0])
+            (let* ([reg (car regs)]
+                   [e (cond
+                       [(fp-reg? reg)
+                        `(inline ,(make-info-loadfl reg) ,(if load? %load-double %store-double) ,%sp ,%zero (immediate ,offset))]
+                       [load? `(set! ,reg ,(%mref ,%sp ,offset))]
+                       [else `(set! ,(%mref ,%sp ,offset) ,reg)])]
+                   [regs (cdr regs)])
+              (if (null? regs)
+                  e
+                  `(seq ,e ,(loop regs (fx+ offset 8))))))))
+      (define (push-registers-size regs)
+        (align (fx* 8 (length regs)) 16))
+      (define (push-registers regs)
+        (with-output-language (L13 Effect)
+          (%seq
+            (set! ,%sp ,(%inline - ,%sp (immediate ,(push-registers-size regs))))
+            ,(move-registers regs #f))))
+      (define (pop-registers regs)
+        (with-output-language (L13 Effect)
+          (%seq
+            ,(move-registers regs #t)
+            (set! ,%sp ,(%inline + ,%sp (immediate ,(push-registers-size regs))))))))
+
+    (define (as-c-call e)
+      (if-feature windows
+        (with-output-language (L13 Effect)
+          (%seq
+           (set! ,%sp ,(%inline - ,%sp (immediate 32)))
+           ,e
+           (set! ,%sp ,(%inline + ,%sp (immediate 32)))))
+        e))
+
     (define asm-foreign-call
       (with-output-language (L13 Effect)
         (letrec ([load-double-stack
@@ -2420,6 +2622,12 @@
                   (lambda (fpreg)
                     (lambda (x) ; requires var
                       `(inline ,(make-info-loadfl fpreg) ,%load-double ,x ,%zero ,(%constant flonum-data-disp))))]
+                 [load-double-reg2
+                  (lambda (fpreg ireg)
+                    (lambda (x) ; requires var
+                      (%seq
+                       (inline ,(make-info-loadfl fpreg) ,%load-double ,x ,%zero ,(%constant flonum-data-disp))
+                       (set! ,ireg (inline ,(make-info-loadfl fpreg) ,%get-double)))))]
                  [load-single-reg
                   (lambda (fpreg)
                     (lambda (x) ; requires var
@@ -2436,18 +2644,100 @@
                            ; x is a non-triv right-hand-side
                            [else (%seq (set! ,ireg ,x) (set! ,ireg ,(%inline zext32 ,ireg)))])]
                         [else `(set! ,ireg ,x)])))]
+                 [load-content-stack
+                  (lambda (offset len)
+                    (lambda (x) ; requires var
+                      (let loop ([offset offset] [x-offset 0] [len len])
+                        (cond
+                         [(= len 0) `(nop)]
+                         [(>= len 8)
+                          `(seq
+                            (set! ,(%mref ,%sp ,offset) (inline ,(make-info-load 'integer-64 #f)
+                                                                ,%load ,x ,%zero (immediate ,x-offset)))
+                            ,(loop (fx+ offset 8) (fx+ x-offset 8) (fx- len 8)))]
+                         [(>= len 4)
+                          `(seq
+                            (set! ,(%mref ,%sp ,offset) (inline ,(make-info-load 'integer-32 #f)
+                                                                ,%load ,x ,%zero (immediate ,x-offset)))
+                            ,(loop (fx+ offset 4) (fx+ x-offset 4) (fx- len 4)))]
+                         [(>= len 2)
+                          `(seq
+                            (set! ,(%mref ,%sp ,offset) (inline ,(make-info-load 'integer-16 #f)
+                                                                ,%load ,x ,%zero (immediate ,x-offset)))
+                            ,(loop (fx+ offset 2) (fx+ x-offset 2) (fx- len 2)))]
+                         [else
+                          `(set! ,(%mref ,%sp ,offset) (inline ,(make-info-load 'integer-8 #f)
+                                                               ,%load ,x ,%zero (immediate ,x-offset)))]))))]
+                 [load-content-regs
+                  (lambda (classes size iint ifp vint vfp)
+                    (lambda (x) ; requires var
+                      (let loop ([size size] [iint iint] [ifp ifp] [classes classes] [x-offset 0])
+                        (cond
+                         [(null? classes) `(nop)]
+                         [(eq? 'sse (car classes))
+                          (cond
+                           [(fx= size 4)
+                            ;; Must be the last element
+                            `(inline ,(make-info-loadfl (vector-ref vfp ifp)) ,%load-single ,x ,%zero (immediate ,x-offset))]
+                           [else
+                            `(seq
+                              (inline ,(make-info-loadfl (vector-ref vfp ifp)) ,%load-double ,x ,%zero (immediate ,x-offset))
+                              ,(loop (fx- size 8) iint (fx+ ifp 1) (cdr classes) (fx+ x-offset 8)))])]
+                         ;; Remaining cases are integers:
+                         [(>= size 8)
+                          `(seq
+                            (set! ,(vector-ref vint iint) (inline ,(make-info-load 'integer-64 #f)
+                                                                  ,%load ,x ,%zero (immediate ,x-offset)))
+                            ,(loop (fx- size 8) (fx+ iint 1) ifp (cdr classes) (fx+ x-offset 8)))]
+                         ;; Remaining cases must be the last element
+                         [else
+                          (let loop ([reg (vector-ref vint iint)] [size size] [x-offset x-offset])
+                            (cond
+                             [(= size 4)
+                              `(set! ,reg (inline ,(make-info-load 'unsigned-32 #f)
+                                                  ,%load ,x ,%zero (immediate ,x-offset)))]
+                             [(= size 2)
+                              `(set! ,reg (inline ,(make-info-load 'unsigned-16 #f)
+                                                  ,%load ,x ,%zero (immediate ,x-offset)))]
+                             [(= size 1)
+                              `(set! ,reg (inline ,(make-info-load 'unsigned-8 #f)
+                                                  ,%load ,x ,%zero (immediate ,x-offset)))]
+                             [(> size 4)
+                              ;; 5, 6, or 7: multiple steps to avoid reading too many bytes
+                              (let ([tmp %rax]) ;; ?? ok to use %rax?
+                                (%seq
+                                 ,(loop reg (fx- size 4) (fx+ x-offset 4))
+                                 (set! ,reg ,(%inline sll ,reg (immediate 32)))
+                                 ,(loop tmp 4 x-offset)
+                                 (set! ,reg ,(%inline + ,reg ,tmp))))]
+                             [else
+                              ;; 3: multiple steps to avoid reading too many bytes
+                              (let ([tmp %rax]) ;; ?? ok to use %rax?
+                                (%seq
+                                 ,(loop reg (fx- size 2) (fx+ x-offset 2))
+                                 (set! ,reg ,(%inline sll ,reg (immediate 16)))
+                                 ,(loop tmp 2 x-offset)
+                                 (set! ,reg ,(%inline + ,reg ,tmp))))]))]))))]
+                 [add-int-regs
+                  (lambda (ints iint vint regs)
+                    (cond
+                     [(fx= 0 ints) regs]
+                     [else
+                      (add-int-regs (fx- ints 1) (fx+ iint 1) vint
+                                    (cons (vector-ref vint iint) regs))]))]
                  [do-args
                   (lambda (types vint vfp)
                     (if-feature windows
                       (let loop ([types types] [locs '()] [regs '()] [i 0] [isp 0])
                         (if (null? types)
-                            (values isp locs regs)
+                            (values isp 0 locs regs)
                             (nanopass-case (Ltype Type) (car types)
                               [(fp-double-float)
                                (if (< i 4)
-                                   (loop (cdr types)
-                                     (cons (load-double-reg (vector-ref vfp i)) locs)
-                                     regs (fx+ i 1) isp)
+                                   (let ([reg (vector-ref vint i)])
+                                     (loop (cdr types)
+                                       (cons (load-double-reg2 (vector-ref vfp i) reg) locs)
+                                       (cons reg regs) (fx+ i 1) isp))
                                    (loop (cdr types)
                                      (cons (load-double-stack isp) locs)
                                      regs i (fx+ isp 8)))]
@@ -2459,6 +2749,44 @@
                                    (loop (cdr types)
                                      (cons (load-single-stack isp) locs)
                                      regs i (fx+ isp 8)))]
+                              [(fp-ftd& ,ftd)
+                               (cond
+                                [(memv ($ftd-size ftd) '(1 2 4 8))
+                                 ;; pass as value in register or as value on the stack
+                                 (cond
+                                  [(< i 4)
+                                   ;; pass as value in register
+                                   (cond
+                                    [(and (not ($ftd-compound? ftd))
+                                          (eq? 'float (caar ($ftd->members ftd))))
+                                     ;; float or double
+                                     (loop (cdr types)
+                                       (cons (load-content-regs '(sse) ($ftd-size ftd) i i vint vfp) locs)
+                                       (add-int-regs 1 i vint regs) (fx+ i 1) isp)]
+                                    [else
+                                     ;; integer
+                                     (loop (cdr types)
+                                       (cons (load-content-regs '(integer) ($ftd-size ftd) i i vint vfp) locs)
+                                       (add-int-regs 1 i vint regs) (fx+ i 1) isp)])]
+                                  [else
+                                   ;; pass as value on the stack
+                                   (loop (cdr types)
+                                     (cons (load-content-stack isp ($ftd-size ftd)) locs)
+                                     regs i (fx+ isp (align ($ftd-size ftd) 8)))])]
+                                [else
+                                 ;; pass by reference in register or by reference on the stack
+                                 (cond
+                                  [(< i 4)
+                                   ;; pass by reference in a register
+                                   (let ([reg (vector-ref vint i)])
+                                     (loop (cdr types)
+                                       (cons (load-int-reg (car types) reg) locs)
+                                       (cons reg regs) (fx+ i 1) isp))]
+                                  [else
+                                   ;; pass by reference on the stack
+                                   (loop (cdr types)
+                                     (cons (load-int-stack isp) locs)
+                                     regs i (fx+ isp 8))])])]
                               [else
                                (if (< i 4)
                                    (let ([reg (vector-ref vint i)])
@@ -2471,7 +2799,7 @@
                                      regs i (fx+ isp 8)))])))
                       (let loop ([types types] [locs '()] [regs '()] [iint 0] [ifp 0] [isp 0])
                         (if (null? types)
-                            (values isp locs regs)
+                            (values isp ifp locs regs)
                             (nanopass-case (Ltype Type) (car types)
                               [(fp-double-float)
                                (if (< ifp 8)
@@ -2489,6 +2817,22 @@
                                    (loop (cdr types)
                                      (cons (load-single-stack isp) locs)
                                      regs iint ifp (fx+ isp 8)))]
+                              [(fp-ftd& ,ftd)
+                               (let* ([classes (classify-eightbytes ftd)]
+                                      [ints (count 'integer classes)]
+                                      [fps (count 'sse classes)])
+                                 (cond
+                                  [(pass-here-by-stack? classes iint ints ifp fps)
+                                   ;; pass on the stack
+                                   (loop (cdr types)
+                                         (cons (load-content-stack isp ($ftd-size ftd)) locs)
+                                         regs iint ifp (fx+ isp (align ($ftd-size ftd) 8)))]
+                                  [else
+                                   ;; pass in registers
+                                   (loop (cdr types)
+                                         (cons (load-content-regs classes ($ftd-size ftd) iint ifp vint vfp) locs)
+                                         (add-int-regs ints iint vint regs)
+                                         (fx+ iint ints) (fx+ ifp fps) isp)]))]
                               [else
                                (if (< iint 6)
                                    (let ([reg (vector-ref vint iint)])
@@ -2499,6 +2843,97 @@
                                    (loop (cdr types)
                                      (cons (load-int-stack isp) locs)
                                      regs iint ifp (fx+ isp 8)))])))))])
+          (define (add-deactivate adjust-active? t0 live* result-live* e)
+            (cond
+             [adjust-active?
+              (let ([save-and-restore
+                     (lambda (regs e)
+                       (cond
+                        [(null? regs) e]
+                        [else (%seq ,(push-registers regs) ,e ,(pop-registers regs))]))])
+                (%seq
+                 (set! ,%deact ,t0)
+                 ,(save-and-restore (cons %deact live*) (as-c-call (%inline deactivate-thread)))
+                 ,e
+                 ,(save-and-restore result-live* (as-c-call `(set! ,%rax ,(%inline activate-thread))))))]
+             [else e]))
+          (define (add-save-fill-target fill-result-here? frame-size locs)
+            (cond
+             [fill-result-here?
+              ;; The callee isn't expecting a pointer to fill with the result.
+              ;; Stash the pointer as an extra argument, and then when the
+              ;; function returns, we'll move register content for the result
+              ;; into the pointer's target
+              (values (fx+ frame-size (constant ptr-bytes))
+                      (append locs
+                              (list
+                               (lambda (x) ; requires var
+                                 `(set! ,(%mref ,%sp ,frame-size) ,x)))))]
+             [else
+              (values frame-size locs)]))
+          (define (add-fill-result c-call saved-offset classes size)
+            (let loop ([classes classes] [offset 0] [iregs (reg-list %rax %rdx)] [fpregs (reg-list %Cfparg1 %Cfparg2)] [size size])
+              (cond
+               [(null? classes)
+                `(seq
+                  ,c-call
+                  (set! ,%rcx ,(%mref ,%sp ,saved-offset)))]
+               [(eq? 'sse (car classes))
+                `(seq
+                  ,(loop (cdr classes) (fx+ offset 8) iregs (cdr fpregs) (fx- size 8))
+                  ,(case size
+                     [(4) `(inline ,(make-info-loadfl (car fpregs)) ,%store-single ,%rcx ,%zero (immediate ,offset))]
+                     [else `(inline ,(make-info-loadfl (car fpregs)) ,%store-double ,%rcx ,%zero (immediate ,offset))]))]
+               [else
+                `(seq
+                  ,(loop (cdr classes) (fx+ offset 8) (cdr iregs) fpregs (fx- size 8))
+                  ,(let ([ireg (car iregs)])
+                     (case size
+                       [(1) `(inline ,(make-info-load 'integer-8 #f) ,%store
+                                     ,%rcx ,%zero (immediate ,offset) ,ireg)]
+                       [(2) `(inline ,(make-info-load 'integer-16 #f) ,%store
+                                     ,%rcx ,%zero (immediate ,offset) ,ireg)]
+                       [(3) (%seq
+                             (inline ,(make-info-load 'integer-16 #f) ,%store
+                                     ,%rcx ,%zero (immediate ,offset) ,ireg)
+                             (set! ,ireg ,(%inline srl ,ireg (immediate 16)))
+                             (inline ,(make-info-load 'integer-8 #f) ,%store
+                                     ,%rcx ,%zero (immediate ,(fx+ 2 offset)) ,ireg))]
+                       [(4) `(inline ,(make-info-load 'integer-32 #f) ,%store
+                                     ,%rcx ,%zero (immediate ,offset) ,ireg)]
+                       [(5 6 7) (%seq
+                                 (inline ,(make-info-load 'integer-32 #f) ,%store
+                                         ,%rcx ,%zero (immediate ,offset) ,ireg)
+                                 (set! ,ireg ,(%inline srl ,ireg (immediate 32)))
+                                 ,(case size
+                                    [(5)
+                                     `(inline ,(make-info-load 'integer-8 #f) ,%store
+                                              ,%rcx ,%zero (immediate ,(fx+ 4 offset)) ,ireg)]
+                                    [(6)
+                                     `(inline ,(make-info-load 'integer-16 #f) ,%store
+                                              ,%rcx ,%zero (immediate ,(fx+ 4 offset)) ,ireg)]
+                                    [(7)
+                                     (%seq
+                                      (inline ,(make-info-load 'integer-16 #f) ,%store
+                                              ,%rcx ,%zero (immediate ,(fx+ 4 offset)) ,ireg)
+                                      (set! ,ireg ,(%inline srl ,ireg (immediate 16)))
+                                      (inline ,(make-info-load 'integer-8 #f) ,%store
+                                              ,%rcx ,%zero (immediate ,(fx+ 6 offset)) ,ireg))]))]
+                       [else `(set! ,(%mref ,%rcx ,offset) ,ireg)])))])))
+          (define (get-result-regs fill-result-here? result-type result-classes)
+            (if fill-result-here?
+                (let loop ([classes result-classes] [iregs (reg-list %rax %rdx)] [fpregs (reg-list %Cfparg1 %Cfparg2)])
+                  (cond
+                   [(null? classes) '()]
+                   [(eq? 'sse (car classes))
+                    (cons (car fpregs) (loop (cdr classes) iregs (cdr fpregs)))]
+                   [else
+                    (cons (car iregs) (loop (cdr classes) (cdr iregs) fpregs))]))
+                (nanopass-case (Ltype Type) result-type
+                  [(fp-double-float) (list %Cfpretval)]
+                  [(fp-single-float) (list %Cfpretval)]
+                  [(fp-void) '()]
+                  [else (list %rax)])))
           (define returnem
             (lambda (frame-size locs ccall r-loc)
              ; need to maintain 16-byte alignment, ignoring the return address
@@ -2518,47 +2953,65 @@
                         `(set! ,%sp ,(%inline + ,%sp (immediate ,frame-size)))))))))
           (lambda (info)
             (safe-assert (reg-callee-save? %tc)) ; no need to save-restore
-            (let ([conv (info-foreign-conv info)]
-                  [arg-type* (info-foreign-arg-type* info)]
-                  [result-type (info-foreign-result-type info)])
-              (with-values (do-args arg-type* (make-vint) (make-vfp))
-                (lambda (frame-size locs live*)
-                  (returnem frame-size locs
-                    (lambda (t0)
-                      (if-feature windows
-                        (%seq
-                          (set! ,%sp ,(%inline - ,%sp (immediate 32)))
-                          (inline ,(make-info-kill*-live* (reg-list %rax) live*) ,%c-call ,t0)
-                          (set! ,%sp ,(%inline + ,%sp (immediate 32))))
-                        `(inline ,(make-info-kill*-live* (reg-list %rax) live*) ,%c-call ,t0)))
-                    (nanopass-case (Ltype Type) result-type
-                      [(fp-double-float)
-                       (lambda (lvalue)
-                         `(inline ,(make-info-loadfl %Cfpretval) ,%store-double ,lvalue ,%zero
-                            ,(%constant flonum-data-disp)))]
-                      [(fp-single-float)
-                       (lambda (lvalue)
-                         `(inline ,(make-info-loadfl %Cfpretval) ,%store-single->double ,lvalue ,%zero
-                            ,(%constant flonum-data-disp)))]
-                      [(fp-integer ,bits)
-                       (case bits
-                         [(8) (lambda (lvalue) `(set! ,lvalue ,(%inline sext8 ,%rax)))]
-                         [(16) (lambda (lvalue) `(set! ,lvalue ,(%inline sext16 ,%rax)))]
-                         [(32) (lambda (lvalue) `(set! ,lvalue ,(%inline sext32 ,%rax)))]
-                         [(64) (lambda (lvalue) `(set! ,lvalue ,%rax))]
-                         [else ($oops 'assembler-internal
-                                 "unexpected asm-foreign-procedures fp-integer size ~s"
-                                 bits)])]
-                      [(fp-unsigned ,bits)
-                       (case bits
-                         [(8) (lambda (lvalue) `(set! ,lvalue ,(%inline zext8 ,%rax)))]
-                         [(16) (lambda (lvalue) `(set! ,lvalue ,(%inline zext16 ,%rax)))]
-                         [(32) (lambda (lvalue) `(set! ,lvalue ,(%inline zext32 ,%rax)))]
-                         [(64) (lambda (lvalue) `(set! ,lvalue ,%rax))]
-                         [else ($oops 'assembler-internal
-                                 "unexpected asm-foreign-procedures fp-unsigned size ~s"
-                                 bits)])]
-                      [else (lambda (lvalue) `(set! ,lvalue ,%rax))])))))))))
+            (let* ([conv* (info-foreign-conv* info)]
+                   [arg-type* (info-foreign-arg-type* info)]
+                   [result-type (info-foreign-result-type info)]
+                   [result-classes (classify-type result-type)]
+                   [result-size (classified-size result-type)]
+                   [fill-result-here? (result-fits-in-registers? result-classes)]
+                   [adjust-active? (if-feature pthreads (memq 'adjust-active conv*) #f)])
+              (with-values (do-args (if fill-result-here? (cdr arg-type*) arg-type*) (make-vint) (make-vfp))
+                (lambda (frame-size nfp locs live*)
+                  (with-values (add-save-fill-target fill-result-here? frame-size locs)
+                    (lambda (frame-size locs)
+                      (returnem frame-size locs
+                        (lambda (t0)
+                          (let* ([t (if adjust-active? %deact t0)] ; need a register if `adjust-active?`
+                                 [c-call
+                                  (add-deactivate adjust-active? t0 live*
+                                   (get-result-regs fill-result-here? result-type result-classes)
+                                   (if-feature windows
+                                     (%seq
+                                       (set! ,%sp ,(%inline - ,%sp (immediate 32)))
+                                       (inline ,(make-info-kill*-live* (reg-list %rax %rdx) live*) ,%c-call ,t)
+                                       (set! ,%sp ,(%inline + ,%sp (immediate 32))))
+                                     (%seq
+                                       ;; System V ABI varargs functions require count of fp regs used in %al register.
+                                       ;; since we don't know if the callee is a varargs function, we always set it.
+                                       (set! ,%rax (immediate ,nfp))
+                                       (inline ,(make-info-kill*-live* (reg-list %rax %rdx) (cons %rax live*)) ,%c-call ,t))))])
+                            (cond
+                             [fill-result-here?
+                              (add-fill-result c-call (fx- frame-size (constant ptr-bytes)) result-classes result-size)]
+                             [else c-call])))
+                        (nanopass-case (Ltype Type) result-type
+                          [(fp-double-float)
+                           (lambda (lvalue)
+                             `(inline ,(make-info-loadfl %Cfpretval) ,%store-double ,lvalue ,%zero
+                                ,(%constant flonum-data-disp)))]
+                          [(fp-single-float)
+                           (lambda (lvalue)
+                             `(inline ,(make-info-loadfl %Cfpretval) ,%store-single->double ,lvalue ,%zero
+                                ,(%constant flonum-data-disp)))]
+                          [(fp-integer ,bits)
+                           (case bits
+                             [(8) (lambda (lvalue) `(set! ,lvalue ,(%inline sext8 ,%rax)))]
+                             [(16) (lambda (lvalue) `(set! ,lvalue ,(%inline sext16 ,%rax)))]
+                             [(32) (lambda (lvalue) `(set! ,lvalue ,(%inline sext32 ,%rax)))]
+                             [(64) (lambda (lvalue) `(set! ,lvalue ,%rax))]
+                             [else ($oops 'assembler-internal
+                                     "unexpected asm-foreign-procedures fp-integer size ~s"
+                                     bits)])]
+                          [(fp-unsigned ,bits)
+                           (case bits
+                             [(8) (lambda (lvalue) `(set! ,lvalue ,(%inline zext8 ,%rax)))]
+                             [(16) (lambda (lvalue) `(set! ,lvalue ,(%inline zext16 ,%rax)))]
+                             [(32) (lambda (lvalue) `(set! ,lvalue ,(%inline zext32 ,%rax)))]
+                             [(64) (lambda (lvalue) `(set! ,lvalue ,%rax))]
+                             [else ($oops 'assembler-internal
+                                     "unexpected asm-foreign-procedures fp-unsigned size ~s"
+                                     bits)])]
+                          [else (lambda (lvalue) `(set! ,lvalue ,%rax))])))))))))))
 
     (define asm-foreign-callable
       #|
@@ -2571,15 +3024,17 @@
                    +---------------------------+ <- 16-byte boundary
                    |                           | 
                    |  space for register args  | four quads
-            sp+80: |                           | 
+         sp+80/96: |                           | 
                    +---------------------------+ <- 16-byte boundary
                    |   incoming return address | one quad
       incoming sp: +---------------------------+
+            sp+72: |        active state       | zero or two quads
+                   +---------------------------+
                    |                           |
                    |   callee-save registers   | RBX, RBP, RDI, RSI, R12, R13, R14, R15 (8 quads)
                    |                           | 
                    +---------------------------+
-                   |         pad word          | one quad
+                   | pad word / indirect space | one quad
              sp+0: +---------------------------+<- 16-byte boundary
       
       
@@ -2588,11 +3043,14 @@
                    +---------------------------+
                    |                           |
                    |    incoming stack args    |
-           sp+176: |                           |
+           sp+192: |                           |
                    +---------------------------+ <- 16-byte boundary
                    |   incoming return address | one quad
                    +---------------------------+
-                   |         pad word          | one quad
+           sp+176: |  pad word / active state  | one quad
+                   +---------------------------+
+                   |   indirect result space   | two quads
+           sp+160: |  (for & results via regs) |
                    +---------------------------+<- 16-byte boundary
                    |                           | 
                    |    saved register args    | space for Carg*, Cfparg* (14 quads)
@@ -2640,6 +3098,10 @@
                              "unexpected load-int-stack fp-unsigned size ~s"
                              bits)])]
                   [else `(set! ,lvalue ,(%mref ,%sp ,offset))]))))
+          (define load-stack-address
+            (lambda (offset)
+              (lambda (lvalue) ; requires lvalue
+                `(set! ,lvalue ,(%inline + ,%sp (immediate ,offset))))))
           (define save-arg-regs
             (lambda (types)
               (define vint (make-vint))
@@ -2663,6 +3125,40 @@
                                  ,%sp ,%zero (immediate ,isp))
                                ,(f (cdr types) (fx+ i 1) (fx+ isp 8)))
                              (f (cdr types) i isp))]
+                        [(fp-ftd& ,ftd)
+                         (cond
+                          [(memv ($ftd-size ftd) '(1 2 4 8))
+                           ;; receive as value in register or on the stack
+                           (cond
+                            [(< i 4)
+                             ;; receive in register
+                             (cond
+                              [(and (not ($ftd-compound? ftd))
+                                    (eq? 'float (caar ($ftd->members ftd))))
+                               ;; float or double
+                               `(seq
+                                 (inline ,(make-info-loadfl (vector-ref vfp i)) ,%store-double
+                                         ,%sp ,%zero (immediate ,isp))
+                                 ,(f (cdr types) (fx+ i 1) (fx+ isp 8)))]
+                              [else
+                               ;; integer
+                               `(seq
+                                 (set! ,(%mref ,%sp ,isp) ,(vector-ref vint i))
+                                 ,(f (cdr types) (fx+ i 1) (fx+ isp 8)))])]
+                            [else
+                             ;; receive by value on the stack
+                             (f (cdr types) i isp)])]
+                          [else
+                           ;; receive by reference in register or on the stack
+                           (cond
+                            [(< i 4)
+                             ;; receive by reference in register
+                             `(seq
+                               (set! ,(%mref ,%sp ,isp) ,(vector-ref vint i))
+                               ,(f (cdr types) (fx+ i 1) (fx+ isp 8)))]
+                            [else
+                             ;; receive by reference on the stack
+                             (f (cdr types) i isp)])])]
                         [else
                          (if (< i 4)
                              (%seq
@@ -2687,6 +3183,29 @@
                                  ,%sp ,%zero (immediate ,isp))
                                ,(f (cdr types) iint (fx+ ifp 1) (fx+ isp 8)))
                              (f (cdr types) iint ifp isp))]
+                        [(fp-ftd& ,ftd)
+                         (let* ([classes (classify-eightbytes ftd)]
+                                [ints (count 'integer classes)]
+                                [fps (count 'sse classes)])
+                           (cond
+                            [(pass-here-by-stack? classes iint ints ifp fps)
+                             ;; receive on the stack
+                             (f (cdr types) iint ifp isp)]
+                            [else
+                             ;; receive via registers
+                             (let reg-loop ([classes classes] [iint iint] [ifp ifp] [isp isp])
+                               (cond
+                                [(null? classes)
+                                 (f (cdr types) iint ifp isp)]
+                                [(eq? (car classes) 'sse)
+                                 `(seq
+                                   (inline ,(make-info-loadfl (vector-ref vfp ifp)) ,%store-double
+                                           ,%sp ,%zero (immediate ,isp))
+                                   ,(reg-loop (cdr classes) iint (fx+ ifp 1) (+ isp 8)))]
+                                [else
+                                 `(seq
+                                   (set! ,(%mref ,%sp ,isp) ,(vector-ref vint iint))
+                                   ,(reg-loop (cdr classes) (fx+ iint 1) ifp (+ isp 8)))]))]))]
                         [else
                          (if (< iint 6)
                              (%seq
@@ -2694,11 +3213,11 @@
                                ,(f (cdr types) (fx+ iint 1) ifp (fx+ isp 8)))
                              (f (cdr types) iint ifp isp))]))))))
           (define do-stack
-            (lambda (types)
+            (lambda (types adjust-active?)
              ; risp is where incoming register args are stored
              ; sisp is where incoming stack args are stored
               (if-feature windows
-                (let f ([types types] [locs '()] [isp 80])
+                (let f ([types types] [locs '()] [isp (if adjust-active? 96 80)])
                   (if (null? types)
                       locs
                       (f (cdr types)
@@ -2706,10 +3225,23 @@
                            (nanopass-case (Ltype Type) (car types)
                              [(fp-double-float) (load-double-stack isp)]
                              [(fp-single-float) (load-single-stack isp)]
+			     [(fp-ftd& ,ftd)
+			      (cond
+			       [(memq ($ftd-size ftd) '(1 2 4 8))
+				;; passed by value
+				(load-stack-address isp)]
+			       [else
+				;; passed by reference
+				(load-int-stack (car types) isp)])]
                              [else (load-int-stack (car types) isp)])
                            locs)
                          (fx+ isp 8))))
-                (let f ([types types] [locs '()] [iint 0] [ifp 0] [risp 48] [sisp 176])
+                (let f ([types types]
+                        [locs '()]
+                        [iint 0]
+                        [ifp 0]
+                        [risp 48]
+                        [sisp 192])
                   (if (null? types)
                       locs
                       (nanopass-case (Ltype Type) (car types)
@@ -2729,6 +3261,23 @@
                              (f (cdr types)
                                (cons (load-single-stack risp) locs)
                                iint (fx+ ifp 1) (fx+ risp 8) sisp))]
+                        [(fp-ftd& ,ftd)
+                         (let* ([classes (classify-eightbytes ftd)]
+                                [ints (count 'integer classes)]
+                                [fps (count 'sse classes)])
+                           (cond
+                            [(pass-here-by-stack? classes iint ints ifp fps)
+                             ;; receive on the stack
+                             (f (cdr types)
+                                (cons (load-stack-address sisp) locs)
+                                iint ifp risp (fx+ sisp ($ftd-size ftd)))]
+                            [else
+                             ;; receive via registers; `save-args-regs` has saved
+                             ;; the registers in a suitable order so that the data
+                             ;; is contiguous on the stack
+                             (f (cdr types)
+                                (cons (load-stack-address risp) locs)
+                                (fx+ iint ints) (fx+ ifp fps) (fx+ risp (fx* 8 (fx+ ints fps))) sisp)]))]
                         [else
                          (if (= iint 6)
                              (f (cdr types)
@@ -2737,17 +3286,93 @@
                              (f (cdr types)
                                (cons (load-int-stack (car types) risp) locs)
                                (fx+ iint 1) ifp (fx+ risp 8) sisp))]))))))
+          (define (do-result result-type result-classes adjust-active?)
+            (nanopass-case (Ltype Type) result-type
+              [(fp-ftd& ,ftd)
+               (cond
+                [(result-fits-in-registers? result-classes)
+                 ;; Copy content of result area on stack into
+                 ;; the integer and floating-point registers
+                 (let loop ([result-classes result-classes]
+                            [offset (if-feature windows 0 160)]
+                            [int* (list %rax %rdx)]
+                            [fp* (list %Cfpretval %Cfparg2)]
+                            [accum '()]
+                            [live* '()])
+                   (cond
+                    [(null? result-classes)
+                     (values (lambda ()
+                               (if (pair? (cdr accum)) `(seq ,(car accum) ,(cadr accum)) (car accum)))
+                             live*)]
+                    [(eq? (car result-classes) 'integer)
+                     (loop (cdr result-classes)
+                           (fx+ offset 8)
+                           (cdr int*)
+                           fp*
+                           (cons `(set! ,(car int*) ,(%mref ,%sp ,offset))
+                                 accum)
+                           (cons (car int*) live*))]
+                    [(eq? (car result-classes) 'sse)
+                     (loop (cdr result-classes)
+                           (fx+ offset 8)
+                           int*
+                           (cdr fp*)
+                           (cons `(inline ,(make-info-loadfl (car fp*)) ,%load-double ,%sp ,%zero (immediate ,offset))
+                                 accum)
+                           live*)]))]
+                [else
+                 (values (lambda ()
+                           ;; Return pointer that was filled; destination was the first argument
+                           `(set! ,%Cretval ,(%mref ,%sp ,(if-feature windows (if adjust-active? 96 80) 48))))
+                         (list %Cretval))])]
+              [(fp-double-float)
+               (values
+                (lambda (x)
+                  `(inline ,(make-info-loadfl %Cfpretval) ,%load-double ,x ,%zero ,(%constant flonum-data-disp)))
+                '())]
+              [(fp-single-float)
+               (values
+                (lambda (x)
+                  `(inline ,(make-info-loadfl %Cfpretval) ,%load-double->single ,x ,%zero ,(%constant flonum-data-disp)))
+                '())]
+              [(fp-void)
+               (values (lambda () `(nop))
+                       '())]
+              [else
+               (values(lambda (x)
+                        `(set! ,%Cretval ,x))
+                      (list %Cretval))]))
+          (define (unactivate result-regs)
+            (let ([e `(seq
+                       (set! ,%Carg1 ,(%mref ,%sp ,(+ (push-registers-size result-regs) (if-feature windows 72 176))))
+                       ,(as-c-call (%inline unactivate-thread ,%Carg1)))])
+              (if (null? result-regs)
+                  e
+                  (%seq
+                   ,(push-registers result-regs)
+                   ,e
+                   ,(pop-registers result-regs)))))
           (lambda (info)
-            (let ([conv (info-foreign-conv info)]
+            (let ([conv* (info-foreign-conv* info)]
                   [arg-type* (info-foreign-arg-type* info)]
                   [result-type (info-foreign-result-type info)])
-              (let ([locs (do-stack arg-type*)])
-                (values
-                  (lambda ()
-                    (%seq
+              (let* ([result-classes (classify-type result-type)]
+                     [adjust-active? (if-feature pthreads (memq 'adjust-active conv*) #f)]
+                     [synthesize-first? (and result-classes
+                                             (result-fits-in-registers? result-classes))]
+                     [locs (do-stack (if synthesize-first? (cdr arg-type*) arg-type*) adjust-active?)])
+                (let-values ([(get-result result-regs) (do-result result-type result-classes adjust-active?)])
+                  (values
+                   (lambda ()
+                     (%seq
                       ,(if-feature windows
                          (%seq
-                           ,(save-arg-regs arg-type*)
+                           ,(let ([e (save-arg-regs arg-type*)])
+                              (if adjust-active?
+                                  (%seq
+                                    ,e
+                                    (set! ,%sp ,(%inline - ,%sp (immediate 16))))
+                                  e))
                            ,(%inline push ,%rbx)
                            ,(%inline push ,%rbp)
                            ,(%inline push ,%rdi)
@@ -2758,7 +3383,7 @@
                            ,(%inline push ,%r15)
                            (set! ,%sp ,(%inline - ,%sp (immediate 8))))
                          (%seq
-                           (set! ,%sp ,(%inline - ,%sp (immediate 120)))
+                           (set! ,%sp ,(%inline - ,%sp (immediate 136)))
                            ,(%inline push ,%rbx)
                            ,(%inline push ,%rbp)
                            ,(%inline push ,%r12)
@@ -2767,16 +3392,38 @@
                            ,(%inline push ,%r15)
                            ,(save-arg-regs arg-type*)))
                       ,(if-feature pthreads
-                         (%seq 
+                         ((lambda (e)
+                            (if adjust-active?
+                                (%seq
+                                 ,(as-c-call `(set! ,%rax ,(%inline activate-thread)))
+                                 (set! ,(%mref ,%sp ,(if-feature windows 72 176)) ,%rax)
+                                 ,e)
+                                e))
+                          (%seq 
                            (set! ,%rax ,(%inline get-tc))
-                           (set! ,%tc ,%rax))
+                           (set! ,%tc ,%rax)))
                          `(set! ,%tc (literal ,(make-info-literal #f 'entry (lookup-c-entry thread-context) 0))))))
-                  (reverse locs)
-                  (lambda (fv* Scall->result-type)
-                    (in-context Tail
-                      (%seq
+                   (let ([locs (reverse locs)])
+                     (if synthesize-first?
+                         (cons (load-stack-address (if-feature windows 0 160)) ; space on stack for results to be returned via registers
+                               locs)
+                         locs))
+                   get-result
+                   (lambda ()
+                     (in-context Tail
+                      ((lambda (e)
+                         (if adjust-active?
+                             (%seq
+                              ,(unactivate result-regs)
+                              ,e)
+                             e))
+                       (%seq
                         ,(if-feature windows
-                           (%seq
+                           ((lambda (e)
+                              (if adjust-active?
+                                  (%seq ,e (set! ,%sp ,(%inline + ,%sp (immediate 16))))
+                                  e))
+                            (%seq
                              (set! ,%sp ,(%inline + ,%sp (immediate 8)))
                              (set! ,%r15 ,(%inline pop))
                              (set! ,%r14 ,(%inline pop))
@@ -2785,7 +3432,7 @@
                              (set! ,%rsi ,(%inline pop))
                              (set! ,%rdi ,(%inline pop))
                              (set! ,%rbp ,(%inline pop))
-                             (set! ,%rbx ,(%inline pop)))
+                             (set! ,%rbx ,(%inline pop))))
                            (%seq
                              (set! ,%r15 ,(%inline pop))
                              (set! ,%r14 ,(%inline pop))
@@ -2793,7 +3440,6 @@
                              (set! ,%r12 ,(%inline pop))
                              (set! ,%rbp ,(%inline pop))
                              (set! ,%rbx ,(%inline pop))
-                             (set! ,%sp ,(%inline + ,%sp (immediate 120)))))
-                        (jump (literal ,(make-info-literal #f 'entry Scall->result-type 0))
-                          (,%rbx ,%rbp ,%r12 ,%r13 ,%r14 ,%r15 ,fv* ...)))))))))))))
+                             (set! ,%sp ,(%inline + ,%sp (immediate 136)))))
+                        (asm-c-return ,null-info ,result-regs ...))))))))))))))
   )

@@ -1,5 +1,5 @@
 ;;; library.ss
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -240,15 +240,27 @@
   (define string-oops
     (lambda (who x)
       ($oops who "~s is not a string" x)))
+  (define mutable-string-oops
+    (lambda (who x)
+      ($oops who "~s is not a mutable string" x)))
   (define vector-oops
     (lambda (who x)
       ($oops who "~s is not a vector" x)))
+  (define mutable-vector-oops
+    (lambda (who x)
+      ($oops who "~s is not a mutable vector" x)))
   (define fxvector-oops
     (lambda (who x)
       ($oops who "~s is not an fxvector" x)))
+  (define mutable-fxvector-oops
+    (lambda (who x)
+      ($oops who "~s is not a mutable fxvector" x)))
   (define bytevector-oops
     (lambda (who x)
       ($oops who "~s is not a bytevector" x)))
+  (define mutable-bytevector-oops
+    (lambda (who x)
+      ($oops who "~s is not a mutable bytevector" x)))
   (define index-oops
     (lambda (who x i)
       ($oops who "~s is not a valid index for ~s" i x)))
@@ -261,13 +273,13 @@
         (string-oops 'string-ref s)))
 
   (define-library-entry (string-set! s i c)
-    (if ($string-ref-check? s i)
+    (if ($string-set!-check? s i)
         (if (char? c)
             (string-set! s i c)
             (char-oops 'string-set! c))
-        (if (string? s)
+        (if (mutable-string? s)
             (index-oops 'string-set! s i)
-            (string-oops 'string-set! s))))
+            (mutable-string-oops 'string-set! s))))
 
   (define-library-entry (string-length s)
     (string-oops 'string-length s))
@@ -278,19 +290,24 @@
         (vector-oops 'vector-ref v)))
 
   (define-library-entry (vector-set! v i x)
-    (if (vector? v)
+    (if (mutable-vector? v)
         (index-oops 'vector-set! v i)
-        (vector-oops 'vector-set! v)))
+        (mutable-vector-oops 'vector-set! v)))
 
   (define-library-entry (vector-set-fixnum! v i x)
     (if (fixnum? x)
-        (if (vector? v)
+        (if (mutable-vector? v)
             (index-oops 'vector-set-fixnum! v i)
-            (vector-oops 'vector-set-fixnum! v))
+            (mutable-vector-oops 'vector-set-fixnum! v))
         ($oops 'vector-set-fixnum! "~s is not a fixnum" x)))
 
   (define-library-entry (vector-length v)
     (vector-oops 'vector-length v))
+
+  (define-library-entry (vector-cas! v i old-x new-x)
+    (if (mutable-vector? v)
+        (index-oops 'vector-cas! v i)
+        (mutable-vector-oops 'vector-cas! v)))
 
   (define-library-entry (fxvector-ref v i)
     (if (fxvector? v)
@@ -298,11 +315,11 @@
         (fxvector-oops 'fxvector-ref v)))
 
   (define-library-entry (fxvector-set! v i x)
-    (if (fxvector? v)
+    (if (mutable-fxvector? v)
         (if (and (fixnum? i) ($fxu< i (fxvector-length v)))
             (fixnum-oops 'fxvector-set! x)
             (index-oops 'fxvector-set! v i))
-        (fxvector-oops 'fxvector-set! v)))
+        (mutable-fxvector-oops 'fxvector-set! v)))
 
   (define-library-entry (fxvector-length v)
     (fxvector-oops 'fxvector-length v))
@@ -318,22 +335,22 @@
         (bytevector-oops 'bytevector-u8-ref v)))
 
   (define-library-entry (bytevector-s8-set! v i k)
-    (if ($bytevector-ref-check? 8 v i)
+    (if ($bytevector-set!-check? 8 v i)
         (if (and (fixnum? k) (fx<= -128 k 127))
             (bytevector-s8-set! v i k)
             ($oops 'bytevector-s8-set! "invalid value ~s" k))
-        (if (bytevector? v)
+        (if (mutable-bytevector? v)
             (index-oops 'bytevector-s8-set! v i)
-            (bytevector-oops 'bytevector-s8-set! v))))
+            (mutable-bytevector-oops 'bytevector-s8-set! v))))
 
   (define-library-entry (bytevector-u8-set! v i k)
-    (if ($bytevector-ref-check? 8 v i)
+    (if ($bytevector-set!-check? 8 v i)
         (if (and (fixnum? k) (fx<= 0 k 255))
             (bytevector-u8-set! v i k)
             ($oops 'bytevector-u8-set! "invalid value ~s" k))
-        (if (bytevector? v)
+        (if (mutable-bytevector? v)
             (index-oops 'bytevector-u8-set! v i)
-            (bytevector-oops 'bytevector-u8-set! v))))
+            (mutable-bytevector-oops 'bytevector-u8-set! v))))
 
   (define-library-entry (bytevector-length v)
     (bytevector-oops 'bytevector-length v))
@@ -401,6 +418,12 @@
 (define-library-entry (unbox x)
   ($oops 'unbox "~s is not a box" x))
 
+(define-library-entry (set-box! b v)
+  ($oops 'set-box! "~s is not a mutable box" b))
+
+(define-library-entry (box-cas! b old-v new-v)
+  ($oops 'box-cas! "~s is not a mutable box" b))
+
 (let ()
 (define (fxnonfixnum1 who x)
   ($oops who "~s is not a fixnum" x))
@@ -460,22 +483,31 @@
   (cond
     [(not (fixnum? x)) (fxnonfixnum1 'fxsll x)]
     [(not (fixnum? y)) (fxnonfixnum1 'fxsll y)]
-    [(fx<= 0 y (constant fixnum-bits))
-     (let ([n (#3%fxsll x y)])
-       (if (if (fx< x 0) (fx> n x) (fx< n x))
-           (fxoops2 'fxsll x y)
-           n))]
+    [(fx= 0 y) x]
+    [($fxu< y (constant fixnum-bits))
+     (if (fx>= x 0)
+         (if (fx< x (fxsll 1 (fx- (- (constant fixnum-bits) 1) y)))
+             (fxsll x y)
+             (fxoops2 'fxsll x y))
+         (if (fx>= x (fxsll -1 (fx- (- (constant fixnum-bits) 1) y)))
+             (fxsll x y)
+             (fxoops2 'fxsll x y)))]
+    [(fx= y (constant fixnum-bits)) (if (fx= x 0) x (fxoops2 'fxsll x y))]
     [else (shift-count-oops 'fxsll y)]))
 
 (define-library-entry (fxarithmetic-shift-left x y)
   (cond
-    [(not (fixnum? x)) (fxnonfixnum1 'fxsll x)]
-    [(not (fixnum? y)) (fxnonfixnum1 'fxsll y)]
-    [(fx<= 0 y (- (constant fixnum-bits) 1))
-     (let ([n (#3%fxarithmetic-shift-left x y)])
-       (if (if (fx< x 0) (fx> n x) (fx< n x))
-           (fxoops2 'fxarithmetic-shift-left x y)
-           n))]
+    [(not (fixnum? x)) (fxnonfixnum1 'fxarithmetic-shift-left x)]
+    [(not (fixnum? y)) (fxnonfixnum1 'fxarithmetic-shift-left y)]
+    [(fx= 0 y) x]
+    [($fxu< y (constant fixnum-bits))
+     (if (fx>= x 0)
+         (if (fx< x (fxsll 1 (fx- (- (constant fixnum-bits) 1) y)))
+             (fxsll x y)
+             (fxoops2 'fxarithmetic-shift-left x y))
+         (if (fx>= x (fxsll -1 (fx- (- (constant fixnum-bits) 1) y)))
+             (fxsll x y)
+             (fxoops2 'fxarithmetic-shift-left x y)))]
     [else (shift-count-oops 'fxarithmetic-shift-left y)]))
 
 (define-library-entry (fxsrl x y)
@@ -500,11 +532,15 @@
   (cond
     [(not (fixnum? x)) (fxnonfixnum1 'fxarithmetic-shift x)]
     [(not (fixnum? y)) (fxnonfixnum1 'fxarithmetic-shift y)]
+    [(fx= 0 y) x]
     [($fxu< y (constant fixnum-bits))
-     (let ([n (#3%fxsll x y)])
-       (if (if (fx< x 0) (fx> n x) (fx< n x))
-           (fxoops2 'fxarithmetic-shift x y)
-           n))]
+     (if (fx>= x 0)
+         (if (fx< x (fxsll 1 (fx- (- (constant fixnum-bits) 1) y)))
+             (fxsll x y)
+             (fxoops2 'fxarithmetic-shift x y))
+         (if (fx>= x (fxsll -1 (fx- (- (constant fixnum-bits) 1) y)))
+             (fxsll x y)
+             (fxoops2 'fxarithmetic-shift x y)))]
     [(fx< (fx- (constant fixnum-bits)) y 0) (fxsra x (fx- y))]
     [else (shift-count-oops 'fxarithmetic-shift y)]))
 
@@ -1407,7 +1443,11 @@
              [b (vector-ref vec idx)])
         (lookup-keyval x b
           values
-          (let ([keyval (if (eq-ht-weak? h) (weak-cons x v) (cons x v))])
+          (let ([keyval (let ([subtype (eq-ht-subtype h)])
+                          (cond
+                           [(eq? subtype (constant eq-hashtable-subtype-normal)) (cons x v)]
+                           [(eq? subtype (constant eq-hashtable-subtype-weak)) (weak-cons x v)]
+                           [else (ephemeron-cons x v)]))])
             (vector-set! vec idx ($make-tlc h keyval b))
             (incr-size! h vec)
             keyval))))
@@ -1423,7 +1463,11 @@
               (begin
                 (vector-set! vec idx
                   ($make-tlc h
-                    (if (eq-ht-weak? h) (weak-cons x v) (cons x v))
+                    (let ([subtype (eq-ht-subtype h)])
+                      (cond
+                       [(eq? subtype (constant eq-hashtable-subtype-normal)) (cons x v)]
+                       [(eq? subtype (constant eq-hashtable-subtype-weak)) (weak-cons x v)]
+                       [else (ephemeron-cons x v)]))
                     b))
                 (incr-size! h vec))))))
   

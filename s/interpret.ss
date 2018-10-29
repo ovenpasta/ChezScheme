@@ -1,6 +1,6 @@
 "interpret.ss"
 ;;; interpret.ss
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -459,7 +459,7 @@
       [(seq ,e1 ,e2)
        (let ((e1 (ip2 e1)) (e2 (ip2 e2)))
          ($rt lambda () ($rt e1) ($rt e2)))]
-      [(foreign ,conv ,name ,e (,arg-type* ...) ,result-type)
+      [(foreign (,conv* ...) ,name ,e (,arg-type* ...) ,result-type)
        (unless $compiler-is-loaded?
          ($oops 'interpret "cannot compile foreign-procedure: compiler is not loaded"))
        (let ([p ($compile-backend
@@ -468,11 +468,11 @@
                     (with-output-language (Lsrc Expr)
                       `(case-lambda ,(make-preinfo-lambda)
                          (clause (,t) 1
-                           (foreign ,conv ,name (ref #f ,t)
+                           (foreign (,conv* ...) ,name (ref #f ,t)
                              (,arg-type* ...) ,result-type))))))])
          (let ([e (ip2 e)])
            ($rt lambda () ((p) ($rt e)))))]
-      [(fcallable ,conv ,e (,arg-type* ...) ,result-type)
+      [(fcallable (,conv* ...) ,e (,arg-type* ...) ,result-type)
        (unless $compiler-is-loaded?
          ($oops 'interpret "cannot compile foreign-callable: compiler is not loaded"))
        (let ([p ($compile-backend
@@ -481,7 +481,7 @@
                     (with-output-language (Lsrc Expr)
                       `(case-lambda ,(make-preinfo-lambda)
                          (clause (,t) 1
-                           (fcallable ,conv (ref #f ,t) (,arg-type* ...) ,result-type))))))])
+                           (fcallable (,conv* ...) (ref #f ,t) (,arg-type* ...) ,result-type))))))])
          (let ([e (ip2 e)])
            ($rt lambda () ((p) ($rt e)))))]
       [else (unexpected-record x)])))
@@ -657,7 +657,8 @@
                                        ($cpletrec ($cp0 x #f)))
                                      x2)])
                              (if cpletrec-ran? x ($cpletrec x))))]
-                    [x2b ($cpcheck x2a)])
+                    [x2b ($cpcheck x2a)]
+                    [x2b ($cpcommonize x2b)])
                (when eoo (pretty-print ($uncprep x2b) eoo))
                (ip2 (ip1 x2b))))
         ([a0 0] [a1 0] [fp 0] [cp 0]))))
@@ -665,8 +666,8 @@
     [,lsrc (ibeval lsrc)]
     [(program ,uid ,body)
      (ibeval ($build-invoke-program uid body))]
-    [(library/ct ,uid ,import-code ,visit-code)
-     (ibeval ($build-install-library/ct-code uid import-code visit-code))]
+    [(library/ct ,uid (,export-id* ...) ,import-code ,visit-code)
+     (ibeval ($build-install-library/ct-code uid export-id* import-code visit-code))]
     [(library/rt ,uid (,dl* ...) (,db* ...) (,dv* ...) (,de* ...) ,body)
      (ibeval ($build-install-library/rt-code uid dl* db* dv* de* body))]
     [,linfo/rt ($install-library/rt-desc linfo/rt for-import? ofn)]

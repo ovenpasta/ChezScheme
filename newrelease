@@ -1,7 +1,7 @@
 #! /bin/csh -f
 
 # newrelease
-# Copyright 1984-2016 Cisco Systems, Inc.
+# Copyright 1984-2017 Cisco Systems, Inc.
 # 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -35,6 +35,9 @@ if ({(echo -n "$1" | grep '^[0-9]\.[0-9]$' >& /dev/null)}) then
 
   # set ZR to release number w/o "."
   set ZR = $MR$mR
+
+  # set underscoreR to release number w/ "_" in place of "."
+  set underscoreR = $MR"_"$mR
 else if ({(echo -n "$1" | grep '^[0-9]\.[0-9]\.[0-9]$' >& /dev/null)}) then
   # set MR to major release number
   set tmp = $R:r
@@ -48,6 +51,9 @@ else if ({(echo -n "$1" | grep '^[0-9]\.[0-9]\.[0-9]$' >& /dev/null)}) then
 
   # set ZR to release number w/o "."
   set ZR = $MR$mR$bR
+
+  # set underscoreR to release number w/ "_" in place of "."
+  set underscoreR = $MR"_"$mR"_"$bR
 else
   echo "invalid release number $R"
   exit 1
@@ -70,9 +76,7 @@ if ($status != 0) exit 1
 cd $W
 
 /bin/rm -f bintar
-sed -e "s/csv[0-9]\.[0-9]\(\.[0-9]\)\?/csv$ZR/g" \
-    -e "s/csv[0-9][0-9][0-9]\?/csv$ZR/g" \
-    ../bintar > bintar
+sed -e "s/csv[0-9][0-9][0-9]*/csv$ZR/g" ../bintar > bintar
 set updatedfiles = ($updatedfiles bintar)
 
 /bin/rm -f BUILDING
@@ -88,25 +92,27 @@ sed -e "s/Chez Scheme Version [^ ]*/Chez Scheme Version $R/" \
 set updatedfiles = ($updatedfiles NOTICE)
 
 mkdir makefiles
-sed -e "s/csv[0-9]\.[0-9]\(\.[0-9]\)\?/csv$R/" ../makefiles/Mf-install.in > makefiles/Mf-install.in
+sed -e "s/csv[0-9]\.[0-9]\(\.[0-9]\)*/csv$R/" ../makefiles/Mf-install.in > makefiles/Mf-install.in
+sed -e "s/csug[0-9]\.[0-9]\(\.[0-9]\)*/csug$R/" -e "s/csug[0-9]_[0-9]\(_[0-9]\)*/csug$underscoreR/" ../makefiles/Makefile-csug.in > makefiles/Makefile-csug.in
 set updatedfiles = ($updatedfiles makefiles/Mf-install.in)
 
 /bin/rm scheme.1.in
-sed -e "s/csv[0-9]\.[0-9]\(\.[0-9]\)\?/csv$R/" ../scheme.1.in > scheme.1.in
+sed -e "s/Chez Scheme Version [0-9]\.[0-9]\(\.[0-9]\)*/Chez Scheme Version $R/" ../scheme.1.in > scheme.1.in
 set updatedfiles = ($updatedfiles scheme.1.in)
 
 /bin/rm -f c/Makefile.{,t}{i3,a6}nt
-sed -e "s/csv[0-9][0-9][0-9]\?/csv$ZR/g" ../c/Makefile.i3nt > c/Makefile.i3nt
-sed -e "s/csv[0-9][0-9][0-9]\?/csv$ZR/g" ../c/Makefile.ti3nt > c/Makefile.ti3nt
-sed -e "s/csv[0-9][0-9][0-9]\?/csv$ZR/g" ../c/Makefile.a6nt > c/Makefile.a6nt
-sed -e "s/csv[0-9][0-9][0-9]\?/csv$ZR/g" ../c/Makefile.ta6nt > c/Makefile.ta6nt
-set updatedfiles = ($updatedfiles c/Makefile.{,t}{i3,a6}nt)
+foreach fn (c/Makefile.{,t}{a6,i3}nt)
+  set updatedfiles = ($updatedfiles $fn)
+  sed -e "s/csv[0-9][0-9][0-9]*/csv$ZR/g" ../$fn > $fn
+end
 
-/bin/rm -f mats/bldnt.bat
-sed -e "s/csv[0-9][0-9][0-9]\?/csv$ZR/g" ../mats/bldnt.bat > mats/bldnt.bat
-set updatedfiles = ($updatedfiles mats/bldnt.bat)
+/bin/rm -f mats/Mf-{,t}{i3,a6}nt
+foreach fn (mats/Mf-{,t}{a6,i3}nt)
+  set updatedfiles = ($updatedfiles $fn)
+  sed -e "s/csv[0-9][0-9][0-9]*/csv$ZR/g" ../$fn > $fn
+end
 
-sed -e "s/csv[0-9][.0-9][0-9]\?/csv$ZR/g" ../workarea > workarea
+sed -e "s/csv[0-9][.0-9][0-9]*/csv$ZR/g" ../workarea > workarea
 chmod +x workarea
 set updatedfiles = ($updatedfiles workarea)
 
@@ -136,6 +142,13 @@ mkdir csug
 sed -e "s/Revised \(.*\) for Chez Scheme Version [^ ]*\./Revised \\INSERTREVISIONMONTHSPACEYEAR for Chez Scheme Version $R./" ../csug/copyright.stex > csug/copyright.stex
 sed -e "s/Revised \(.*\) for Chez Scheme Version [^ ]*<br>/Revised \\INSERTREVISIONMONTHSPACEYEAR for Chez Scheme Version $R<br>/" ../csug/csug.stex > csug/csug.stex
 set updatedfiles = ($updatedfiles csug/csug.stex)
+
+mkdir wininstall
+sed -e "s/VERSION := .*/VERSION := $R/" ../wininstall/Makefile > wininstall/Makefile
+foreach fn (wininstall/{,t}{a6,i3}nt.wxs)
+  set updatedfiles = ($updatedfiles $fn)
+  sed -e "s/csv[0-9][0-9][0-9]*/csv$ZR/" ../$fn > $fn
+end
 
 /bin/rm LOG
 cat ../LOG > LOG

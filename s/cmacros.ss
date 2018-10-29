@@ -1,4 +1,4 @@
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -328,7 +328,7 @@
                  [(_ foo e1 e2) e1] ...
                  [(_ bar e1 e2) e2]))))])))
 
-(define-constant scheme-version #x00090401)
+(define-constant scheme-version #x00090501)
 
 (define-syntax define-machine-types
   (lambda (x)
@@ -442,7 +442,7 @@
 (define-constant fasl-type-small-integer 25)
 (define-constant fasl-type-base-rtd 26)
 (define-constant fasl-type-fxvector 27)
-; 28
+(define-constant fasl-type-ephemeron 28)
 (define-constant fasl-type-bytevector 29)
 (define-constant fasl-type-weak-pair 30)
 (define-constant fasl-type-eq-hashtable 31)
@@ -450,6 +450,12 @@
 (define-constant fasl-type-group 33)
 (define-constant fasl-type-visit 34)
 (define-constant fasl-type-revisit 35)
+
+(define-constant fasl-type-immutable-vector 36)
+(define-constant fasl-type-immutable-string 37)
+(define-constant fasl-type-immutable-fxvector 38)
+(define-constant fasl-type-immutable-bytevector 39)
+(define-constant fasl-type-immutable-box 40)
 
 (define-constant fasl-fld-ptr 0)
 (define-constant fasl-fld-u8 1)
@@ -636,15 +642,16 @@
       (symbol "symbol" #\x 2)            ;
       (port "port" #\q 3)                ;
       (weakpair "weakpr" #\w 4)          ;
-      (pure "pure" #\p 5)                ; swept immutable objects allocated here (all ptrs)
-      (continuation "cont" #\k 6)        ;
-      (code "code" #\c 7)                ;
-      (pure-typed-object "p-tobj" #\r 8) ;
-      (impure-record "ip-rec" #\s 9))    ;
+      (ephemeron "emph" #\e 5)           ;
+      (pure "pure" #\p 6)                ; swept immutable objects allocated here (all ptrs)
+      (continuation "cont" #\k 7)        ;
+      (code "code" #\c 8)                ;
+      (pure-typed-object "p-tobj" #\r 9) ;
+      (impure-record "ip-rec" #\s 10))   ;
     (unswept
-      (data "data" #\d 10)))             ; unswept objects allocated here
+      (data "data" #\d 11)))             ; unswept objects allocated here
   (unreal
-    (empty "empty" #\e 11)))             ; available segments
+    (empty "empty" #\e 12)))             ; available segments
 
 ;;; enumeration of types for which gc tracks object counts
 ;;; also update gc.c
@@ -674,7 +681,8 @@
 (define-constant countof-locked 22)
 (define-constant countof-guardian 23)
 (define-constant countof-oblist 24)
-(define-constant countof-types 25)
+(define-constant countof-ephemeron 25)
+(define-constant countof-types 26)
 
 ;;; type-fixnum is assumed to be all zeros by at least by vector, fxvector,
 ;;; and bytevector index checks
@@ -701,14 +709,29 @@
 (define-constant ptr black-hole     #b01000110)
 (define-constant ptr sbwp           #b01001110)
 
-;;; vector type/length field is a fixnum
-;;; (define-constant type-vector (constant type-fixnum))
+;;; on 32-bit machines, vectors get two primary tag bits, including
+;;; one for the immutable flag, and so do bytevectors, so their maximum
+;;; lengths are equal to the most-positive fixnum on 32-bit machines.
+;;; strings and fxvectors get only one primary tag bit each and have
+;;; to use a different bit for the immutable flag, so their maximum
+;;; lengths are equal to 1/2 of the most-positive fixnum on 32-bit
+;;; machines.  taking sizes of vector, bytevector, string, and fxvector
+;;; elements into account, a vector can occupy up to 1/2 of virtual
+;;; memory, a string or fxvector up to 1/4, and a bytevector up to 1/8.
+
+;;; on 64-bit machines, vectors get only one of the primary tag bits,
+;;; bytevectors still get two (but don't need two), and strings and
+;;; fxvectors still get one.  all have maximum lengths equal to the
+;;; most-positive fixnum.
+
+;;; vector type/length field must look like a fixnum.  an immutable bit sits just above the fixnum tag, with the length above that.
+(define-constant type-vector (constant type-fixnum))
 ; #b000 occupied by vectors on 32- and 64-bit machines
-(define-constant type-string                #b001)
-; #b010 unused
+(define-constant type-bytevector             #b01)
+(define-constant type-string                #b010)
 (define-constant type-fxvector              #b011)
 ; #b100 occupied by vectors on 32-bit machines, unused on 64-bit machines
-(define-constant type-bytevector            #b101)
+; #b101 occupied by type-immutable-bytevector
 (define-constant type-other-number         #b0110) ; bit 3 reset for numbers
 (define-constant type-bignum              #b00110) ; bit 4 reset for bignums
 (define-constant type-positive-bignum    #b000110)
@@ -716,7 +739,8 @@
 (define-constant type-ratnum           #b00010110) ; bit 4 set for non-bignum numbers
 (define-constant type-inexactnum       #b00110110)
 (define-constant type-exactnum         #b01010110)
-(define-constant type-box              #b00001110) ; bit 3 set for non-numbers
+(define-constant type-box               #b0001110) ; bit 3 set for non-numbers
+(define-constant type-immutable-box    #b10001110) ; low 7 bits match `type-box`
 (define-constant type-port             #b00011110)
 ; #b00101110 (forward_marker) must not be used
 (define-constant type-code             #b00111110)
@@ -740,10 +764,14 @@
 
 (define-constant fixnum-offset (- (constant ptr-bits) (constant fixnum-bits)))
 
-(define-constant string-length-offset      3)
+; string length field (high bits) + immutabilty is stored with type
+(define-constant string-length-offset      4)
+(define-constant string-immutable-flag
+  (expt 2 (- (constant string-length-offset) 1)))
 (define-constant iptr maximum-string-length
   (min (- (expt 2 (fx- (constant ptr-bits) (constant string-length-offset))) 1)
        (constant most-positive-fixnum)))
+
 (define-constant bignum-sign-offset        5)
 (define-constant bignum-length-offset      6)
 (define-constant iptr maximum-bignum-length
@@ -752,14 +780,26 @@
 (define-constant bigit-bits                32)
 (define-constant bigit-bytes               (/ (constant bigit-bits) 8))
 
-; fxvector length field is stored with type
-(define-constant fxvector-length-offset 3)
+; vector length field (high bits) + immutabilty is stored with type
+(define-constant vector-length-offset (fx+ 1 (constant fixnum-offset)))
+(define-constant vector-immutable-flag
+  (expt 2 (- (constant vector-length-offset) 1)))
+(define-constant iptr maximum-vector-length
+  (min (- (expt 2 (fx- (constant ptr-bits) (constant vector-length-offset))) 1)
+       (constant most-positive-fixnum)))
+
+; fxvector length field (high bits) + immutabilty is stored with type
+(define-constant fxvector-length-offset 4)
+(define-constant fxvector-immutable-flag
+  (expt 2 (- (constant fxvector-length-offset) 1)))
 (define-constant iptr maximum-fxvector-length
   (min (- (expt 2 (fx- (constant ptr-bits) (constant fxvector-length-offset))) 1)
        (constant most-positive-fixnum)))
 
-; bytevector length field is stored with type
+; bytevector length field (high bits) + immutabilty is stored with type
 (define-constant bytevector-length-offset 3)
+(define-constant bytevector-immutable-flag
+  (expt 2 (- (constant bytevector-length-offset) 1)))
 (define-constant iptr maximum-bytevector-length
   (min (- (expt 2 (fx- (constant ptr-bits) (constant bytevector-length-offset))) 1)
           (constant most-positive-fixnum)))
@@ -807,8 +847,6 @@
 
 (define-constant byte-constant-mask (- (ash 1 (constant ptr-bits)) 1))
 
-;;; mask-fixnum is assumed to be all ones followed by some number of
-;;; zeros at least by vector, fxvector, and bytevector index checks
 (define-constant mask-fixnum (- (ash 1 (constant fixnum-offset)) 1))
 
 ;;; octets are fixnums in the range 0..255
@@ -830,11 +868,11 @@
 (define-constant mask-nil     (constant byte-constant-mask))
 (define-constant mask-bwp     (constant byte-constant-mask))
 
-;;; vector type/length field is a fixnum
-;;; (define-constant mask-vector (constant mask-fixnum))
+;;; vector type/length field must look like a fixnum.  an immutable bit sits just above the fixnum tag, with the length above that.
+(define-constant mask-vector (constant mask-fixnum))
+(define-constant mask-bytevector         #b11)
 (define-constant mask-string            #b111)
 (define-constant mask-fxvector          #b111)
-(define-constant mask-bytevector        #b111)
 (define-constant mask-other-number     #b1111)
 (define-constant mask-bignum          #b11111)
 (define-constant mask-bignum-sign    #b100000)
@@ -866,7 +904,7 @@
   (fxlogor (fxsll (constant port-flag-binary) (constant port-flags-offset))
            (constant mask-output-port)))
 (define-constant mask-textual-output-port (constant mask-binary-output-port))
-(define-constant mask-box          (constant byte-constant-mask))
+(define-constant mask-box                #x7F)
 (define-constant mask-code               #xFF)
 (define-constant mask-system-code
   (fxlogor (fxsll (constant code-flag-system) (constant code-flags-offset))
@@ -877,9 +915,35 @@
 (define-constant mask-thread       (constant byte-constant-mask))
 (define-constant mask-tlc          (constant byte-constant-mask))
 
-(define-constant mask-positive-fixnum #x80000003)
+(define-constant type-mutable-vector (constant type-vector))
+(define-constant type-immutable-vector
+  (fxlogor (constant type-vector) (constant vector-immutable-flag)))
+(define-constant mask-mutable-vector
+  (fxlogor (constant mask-vector) (constant vector-immutable-flag)))
+
+(define-constant type-mutable-string (constant type-string))
+(define-constant type-immutable-string
+  (fxlogor (constant type-string) (constant string-immutable-flag)))
+(define-constant mask-mutable-string
+  (fxlogor (constant mask-string) (constant string-immutable-flag)))
+
+(define-constant type-mutable-fxvector (constant type-fxvector))
+(define-constant type-immutable-fxvector
+  (fxlogor (constant type-fxvector) (constant fxvector-immutable-flag)))
+(define-constant mask-mutable-fxvector
+  (fxlogor (constant mask-fxvector) (constant fxvector-immutable-flag)))
+
+(define-constant type-mutable-bytevector (constant type-bytevector))
+(define-constant type-immutable-bytevector
+  (fxlogor (constant type-bytevector) (constant bytevector-immutable-flag)))
+(define-constant mask-mutable-bytevector
+  (fxlogor (constant mask-bytevector) (constant bytevector-immutable-flag)))
+
+(define-constant type-mutable-box (constant type-box))
+(define-constant mask-mutable-box (constant byte-constant-mask))
 
 (define-constant fixnum-factor        (expt 2 (constant fixnum-offset)))
+(define-constant vector-length-factor (expt 2 (constant vector-length-offset)))
 (define-constant string-length-factor (expt 2 (constant string-length-offset)))
 (define-constant bignum-length-factor (expt 2 (constant bignum-length-offset)))
 (define-constant fxvector-length-factor (expt 2 (constant fxvector-length-offset)))
@@ -1122,6 +1186,12 @@
   ([iptr type]
    [ptr ref]))
 
+(define-primitive-structure-disps ephemeron type-pair
+  ([ptr car]
+   [ptr cdr]
+   [ptr next] ; `next` is needed by the GC to keep track of pending ephemerons
+   [ptr trigger-next])) ; `trigger-next` is similar, but for segment-specific lists
+
 (define-primitive-structure-disps tlc type-typed-object
   ([iptr type]
    [ptr keyval]
@@ -1142,7 +1212,7 @@
    [ptr denominator]))
 
 (define-primitive-structure-disps vector type-typed-object
-  ([ptr type]         ;; type is the fixnum length in ptrs
+  ([iptr type]
    [ptr data 0]))
 
 (define-primitive-structure-disps fxvector type-typed-object
@@ -1210,6 +1280,7 @@
    [iptr length]
    [ptr reloc]
    [ptr name]
+   [ptr arity-mask]
    [iptr closure-length]
    [ptr info]
    [ptr pinfo*]
@@ -1282,16 +1353,24 @@
    [ptr current-error]
    [ptr block-counter]
    [ptr sfd]
+   [ptr current-mso]
    [ptr target-machine]
    [ptr fxlength-bv]
    [ptr fxfirst-bit-set-bv]
+   [ptr null-immutable-vector]
+   [ptr null-immutable-fxvector]
+   [ptr null-immutable-bytevector]
+   [ptr null-immutable-string]
    [ptr meta-level]
    [ptr compile-profile]
    [ptr generate-inspector-information]
+   [ptr generate-procedure-source-information]
    [ptr generate-profile-forms]
    [ptr optimize-level]
    [ptr subset-mode]
    [ptr suppress-primitive-inlining]
+   [ptr default-record-equal-procedure]
+   [ptr default-record-hash-procedure]
    [U64 instr-counter]
    [U64 alloc-counter]
    [ptr parameters]))
@@ -1310,6 +1389,10 @@
                       (getprop sym '*constant* #f))
                  (cons (string->symbol (substring str 3 (- n 5))) params)
                  params))))))
+
+(define-constant unactivate-mode-noop       0)
+(define-constant unactivate-mode-deactivate 1)
+(define-constant unactivate-mode-destroy    2)
 
 (define-primitive-structure-disps rtd-counts type-typed-object
   ([iptr type]
@@ -1772,6 +1855,10 @@
 
 (define-constant hashtable-default-size 8)
 
+(define-constant eq-hashtable-subtype-normal 0)
+(define-constant eq-hashtable-subtype-weak 1)
+(define-constant eq-hashtable-subtype-ephemeron 2)
+
 ; keep in sync with make-date
 (define-constant dtvec-nsec 0)
 (define-constant dtvec-sec 1)
@@ -1784,7 +1871,8 @@
 (define-constant dtvec-yday 8)
 (define-constant dtvec-isdst 9)
 (define-constant dtvec-tzoff 10)
-(define-constant dtvec-size 11)
+(define-constant dtvec-tzname 11)
+(define-constant dtvec-size 12)
 
 (define-constant time-process 0)
 (define-constant time-thread 1)
@@ -2254,6 +2342,8 @@
      (car #f 1 #t #t)
      (cdr #f 1 #t #t)
      (unbox #f 1 #t #t)
+     (set-box! #f 2 #t #t)
+     (box-cas! #f 3 #t #t)
      (= #f 2 #f #t)
      (< #f 2 #f #t)
      (> #f 2 #f #t)
@@ -2337,6 +2427,7 @@
      (map2 #f 3 #f #t)
      (for-each1 #f 2 #f #t)
      (vector-ref #f 2 #t #t)
+     (vector-cas! #f 4 #t #t)
      (vector-set! #f 3 #t #t)
      (vector-length #f 1 #t #t)
      (string-ref #f 2 #t #t)
@@ -2542,6 +2633,9 @@
      split-and-resize
      raw-collect-cond
      raw-tc-mutex
+     activate-thread
+     deactivate-thread
+     unactivate-thread
      handle-values-error
      handle-mvlet-error
      handle-arg-error
@@ -2551,16 +2645,7 @@
      scan-remembered-set
      instantiate-code-object
      Sreturn
-     Scall->ptr
-     Scall->fptr
-     Scall->bytevector
-     Scall->fixnum
-     Scall->int32
-     Scall->uns32
-     Scall->double
-     Scall->single
-     Scall->int64
-     Scall->uns64
-     Scall->void
+     Scall-one-result
+     Scall-any-results
   ))
 )

@@ -1,5 +1,5 @@
-Building Chez Scheme Version 9.4.1
-Copyright 1984-2016 Cisco Systems, Inc.
+Building Chez Scheme Version 9.5.1
+Copyright 1984-2017 Cisco Systems, Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -42,6 +42,17 @@ Prerequisites:
 * gcc
 * Header files and libraries for ncurses
 * Header files and libraries for X windows
+* Header files and libraries for uuid
+
+Uninstalling on Unix-like systems is as simple as running:
+
+sudo make uninstall
+
+BUILDING VERSION 9.5 AND EARLIER
+
+If the environment variable CHEZSCHEMELIBDIRS is set, please unset
+it before running make.  Depending on the variable's value, it can
+cause the build process to fail.
 
 DETAILS
 
@@ -91,6 +102,17 @@ The make file supports several targets:
   fails.  This should not fail unless the distributed boot files are
   out of sync with the sources.
 
+  When you make a modification to the system that causes the C side to
+  get out of sync with the Scheme side so that the build fails, try
+  the following from $W if you have a recent version of Chez Scheme
+  installed in your path:
+
+    make -C s clean all patchfile=patch Scheme=scheme SCHEMEHEAPDIRS={see below}
+    make build
+
+  Set SCHEMEHEAPDIRS to /usr/lib/csv%v/%m:/usr/local/lib/csv%v/%m on
+  Unix-like systems and to %x/../../boot/%m on Windows systems.
+
   To run Chez Scheme without installing, you need to tell the executable
   where to find the boot files.  This can be done via command-line
   arguments, e.g.:
@@ -112,8 +134,11 @@ The make file supports several targets:
   is overridden via an argument to ./configure, $W is the same as $M.)
 
 'sudo make install'
-  runs the build plus installs the resulting executable, boot files,
+  runs the build plus installs the resulting executables, boot files,
   example files, and manual pages.
+
+'sudo make uninstall'
+  uninstalls the executables, boot files, example files, and manual pages.
 
 'make test'
   runs the build plus runs a set of test programs in various different
@@ -151,7 +176,7 @@ The make file supports several targets:
   can take 5 minutes or more.
 
   'make bootfiles' builds boot files for each machine type for which
-  a subdirectory exists in the top-level boot directory.  to build
+  a subdirectory exists in the top-level boot directory.  To build
   for a supported machine type that isn't built by default, simply
   add the appropriate subdirectory, i.e., 'mkdir boot/$M', where M
   is the machine type, before running 'make bootfiles'.  You can
@@ -167,16 +192,23 @@ The make file supports several targets:
 
 WINDOWS
 
-Building Chez Scheme under Windows with Cygwin follows the
-instructions above except that make install is not supported:
+Building Chez Scheme under 64-bit Windows with Cygwin or Bash/WSL
+follows the instructions above, except that 'make install' and 'make
+uninstall' are not supported. On Bash/WSL, the build directory must be
+in a location with a Windows path such as /mnt/c, and the 'OS'
+environment variable must be set to 'Windows_NT' to indicate a build
+for Windows, as opposed to a build for Linux on Windows:
 
-./configure
-make
+env OS=Windows_NT ./configure
+env OS=Windows_NT make
 
 Prerequisites:
 
-* Cygwin with bash, grep, make, sed, etc.
-* Microsoft Visual Studio 2015
+* Cygwin or Bash/WSL with bash, git, grep, make, sed, etc.
+* Microsoft Visual Studio 2017 or 2015
+* WiX Toolset (for making an install)
+
+Be sure that git config core.autocrlf is set to false.
 
 To run Chez Scheme or Petite Chez Scheme from a Windows command prompt,
 set PATH:
@@ -187,10 +219,22 @@ again with $W and $M replaced with the workarea name and machine
 type, and start Chez Scheme with the command "scheme" or Petite
 Chez with the command "petite".
 
-The executables are linked against the Microsoft Visual C++ run-time
-library vcruntime140.dll. If you distribute the executables to a
-different system, be sure to include the redistributable run-time
-library.
+The executables are dynamically linked against the Microsoft Visual
+C++ run-time library vcruntime140.dll. If you distribute the
+executables to a different system, be sure to include the
+redistributable run-time library.
+
+Making an Install for Windows
+
+cd wininstall
+make workareas
+make
+
+This will create workareas and compile binaries for the a6nt, i3nt,
+ta6nt, and ti3nt configurations and then include them in a single
+Windows installer package Chez Scheme.exe. The package also includes
+example files and the redistributable Microsoft Visual C++ run-time
+libraries.
 
 Testing under Windows
 

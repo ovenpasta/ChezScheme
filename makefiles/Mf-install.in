@@ -1,5 +1,5 @@
 # Mf-install.in
-# Copyright 1984-2016 Cisco Systems, Inc.
+# Copyright 1984-2017 Cisco Systems, Inc.
 # 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -58,7 +58,7 @@ InstallScriptName=scheme-script
 #                 no changes should be needed below this point                #
 ###############################################################################
 
-Version=csv9.4.1
+Version=csv9.5.1
 Include=boot/$m
 PetiteBoot=boot/$m/petite.boot
 SchemeBoot=boot/$m/scheme.boot
@@ -79,17 +79,12 @@ SchemeScriptPath=${Bin}/${InstallScriptName}
 install: bininstall libbininstall maninstall liblibinstall
 
 uninstall:
-	@echo To uninstall all machine types:
-	@echo rm -rf ${Lib}
-	@echo rm -f ${PetitePath}
-	@echo rm -f ${SchemePath}
-	@echo rm -f ${Man}/${InstallPetiteName}.1'{,.gz}'
-	@echo rm -f ${Man}/${InstallSchemeName}.1'{,.gz}'
-	@echo ""
-	@echo To uninstall just machine-type $m
-	@echo rm -rf ${Lib}/$m
-	@echo rm -f ${PetitePath}
-	@echo rm -f ${SchemePath}
+	rm -rf ${Lib}
+	rm -f ${PetitePath}
+	rm -f ${SchemePath}
+	rm -f ${SchemeScriptPath}
+	rm -f ${Man}/${InstallPetiteName}.1{,.gz}
+	rm -f ${Man}/${InstallSchemeName}.1{,.gz}
 
 scheme.1 petite.1: scheme.1.in
 	sed -e "s;{InstallBin};${InstallBin};g" \
@@ -122,7 +117,9 @@ libbininstall: ${LibBin}
           /bin/rm -f ${LibBin}/${InstallSchemeName}.boot;\
           ln -f ${LibBin}/scheme.boot ${LibBin}/${InstallSchemeName}.boot;\
         fi
-	ln -sf ${LibBin}/scheme.boot ${LibBin}/${InstallScriptName}.boot;
+	ln -f ${LibBin}/scheme.boot ${LibBin}/${InstallScriptName}.boot;
+	$I -m 444 ${Include}/kernel.o ${LibBin}
+	$I -m 444 ${Include}/main.o ${LibBin}
 	$I -m 444 ${Include}/scheme.h ${LibBin}
 
 maninstall: scheme.1 petite.1 ${Man}

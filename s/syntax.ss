@@ -1,6 +1,6 @@
 "syntax.ss"
 ;;; syntax.ss
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -582,9 +582,9 @@
 
 (define build-lexical-reference
   (lambda (ae prelex)
-    (when (prelex-referenced prelex)
-      (set-prelex-multiply-referenced! prelex #t))
-    (set-prelex-referenced! prelex #t)
+    (if (prelex-referenced prelex)
+        (set-prelex-multiply-referenced! prelex #t)
+        (set-prelex-referenced! prelex #t))
     (build-profile ae `(ref ,(ae->src ae) ,prelex))))
 
 (define build-lexical-assignment
@@ -679,20 +679,24 @@
               [(integer-40 integer-48 integer-56 integer-64) `(fp-integer 64)]
               [(unsigned-40 unsigned-48 unsigned-56 unsigned-64) `(fp-unsigned 64)]
               [(void) (and void-okay? `(fp-void))]
-              [else (and ($ftd? x) `(fp-ftd ,x))])
+              [else
+               (cond
+                [($ftd? x) `(fp-ftd ,x)]
+                [($ftd-as-box? x) `(fp-ftd& ,(unbox x))]
+                [else #f])])
             ($oops #f "invalid ~a ~a specifier ~s" who what x)))))
 
   (define build-foreign-procedure
-    (lambda (ae conv foreign-name foreign-addr params result)
+    (lambda (ae conv* foreign-name foreign-addr params result)
       (build-profile ae
-        `(foreign ,conv ,foreign-name ,foreign-addr
+        `(foreign (,conv* ...) ,foreign-name ,foreign-addr
            (,(map (lambda (x) (build-fp-specifier 'foreign-procedure 'parameter x #f)) params) ...)
            ,(build-fp-specifier 'foreign-procedure "result" result #t)))))
 
   (define build-foreign-callable
-    (lambda (ae conv proc params result)
+    (lambda (ae conv* proc params result)
       (build-profile ae
-        `(fcallable ,conv ,proc
+        `(fcallable (,conv* ...) ,proc
            (,(map (lambda (x) (build-fp-specifier 'foreign-callable 'parameter x #f)) params) ...)
            ,(build-fp-specifier 'foreign-callable "result" result #t))))))
 
@@ -824,9 +828,10 @@
          ,(build-sequence no-source init*)))))
 
 (define build-top-library/ct
-  (lambda (uid import-code* visit-code*)
+  (lambda (uid export-id* import-code* visit-code*)
     (with-output-language (Lexpand ctLibrary)
       `(library/ct ,uid
+         (,export-id* ...)
          ,(build-lambda no-source '()
             (build-sequence no-source import-code*))
          ,(if (null? visit-code*)
@@ -2353,9 +2358,10 @@
     (mutable clo*)                ; cross-library optimization information
     (mutable loaded-import-reqs)
     (mutable loaded-visit-reqs)
+    (mutable export-id*)          ; ids that need to be reset when visit-code raises an exception
     (mutable import-code)
     (mutable visit-code))
-  (nongenerative #{ctdesc bthma8spr7lds76z4hlmr9-1})
+  (nongenerative #{ctdesc bthma8spr7lds76z4hlmr9-2})
   (sealed #t))
 
 (define-record-type rtdesc
@@ -2371,6 +2377,7 @@
          libdesc-loaded-visit-reqs libdesc-loaded-visit-reqs-set!
          libdesc-import-code libdesc-import-code-set!
          libdesc-visit-code libdesc-visit-code-set!
+         libdesc-visit-id* libdesc-visit-id*-set!
          libdesc-clo* libdesc-clo*-set!)
   (define get-ctdesc
     (lambda (desc)
@@ -2412,6 +2419,12 @@
   (define libdesc-visit-code-set!
     (lambda (desc x)
       (ctdesc-visit-code-set! (get-ctdesc desc) x)))
+  (define libdesc-visit-id*
+    (lambda (desc)
+      (ctdesc-export-id* (get-ctdesc desc))))
+  (define libdesc-visit-id*-set!
+    (lambda (desc x)
+      (ctdesc-export-id*-set! (get-ctdesc desc) x)))
   (define libdesc-clo*
     (lambda (desc)
       (ctdesc-clo* (get-ctdesc desc))))
@@ -2456,10 +2469,15 @@
               (when (eq? p 'pending)
                 ($oops #f "cyclic dependency involving visit of library ~s" (libdesc-path desc)))
               (libdesc-visit-code-set! desc 'pending)
-              (for-each (lambda (req) (visit-library (libreq-uid req))) (libdesc-visit-visit-req* desc))
-              (for-each (lambda (req) (invoke-library (libreq-uid req))) (libdesc-visit-req* desc))
-              (p)
-              (libdesc-visit-code-set! desc #f))]))]
+              (on-reset
+                (begin
+                  (for-each (lambda (id) ($sc-put-cte id (make-binding 'visit uid) #f)) (libdesc-visit-id* desc))
+                  (libdesc-visit-code-set! desc p))
+                (for-each (lambda (req) (visit-library (libreq-uid req))) (libdesc-visit-visit-req* desc))
+                (for-each (lambda (req) (invoke-library (libreq-uid req))) (libdesc-visit-req* desc))
+                (p))
+              (libdesc-visit-code-set! desc #f)
+              (libdesc-visit-id*-set! desc '()))]))]
       [else ($oops #f "library ~:s is not defined" uid)])))
 
 (define invoke-library
@@ -2476,8 +2494,9 @@
               (when (eq? p 'pending)
                 ($oops #f "cyclic dependency involving invocation of library ~s" (libdesc-path desc)))
               (libdesc-invoke-code-set! desc 'pending)
-              (for-each (lambda (req) (invoke-library (libreq-uid req))) (libdesc-invoke-req* desc))
-              (p)
+              (on-reset (libdesc-invoke-code-set! desc p)
+                (for-each (lambda (req) (invoke-library (libreq-uid req))) (libdesc-invoke-req* desc))
+                (p))
               (libdesc-invoke-code-set! desc #f))]))]
       [else ($oops #f "library ~:s is not defined" uid)])))
 
@@ -2521,8 +2540,9 @@
                      (when (eq? p 'pending)
                        ($oops #f "cyclic dependency involving invocation of library ~s" (libdesc-path desc)))
                      (libdesc-invoke-code-set! desc 'pending)
-                     (for-each (lambda (req) (invoke-library (libreq-uid req))) (libdesc-invoke-req* desc))
-                     (p)
+                     (on-reset (libdesc-invoke-code-set! desc p)
+                       (for-each (lambda (req) (invoke-library (libreq-uid req))) (libdesc-invoke-req* desc))
+                       (p))
                      (libdesc-invoke-code-set! desc #f))]))
               (unless (memp (lambda (x) (eq? (libreq-uid x) uid)) req*)
                 (set! req* (cons (make-libreq (libdesc-path desc) (libdesc-version desc) uid) req*))))]
@@ -2622,7 +2642,7 @@
                         (install-library library-path library-uid
                          ; import-code & visit-code is #f because vthunk invocation has already set up compile-time environment
                           (make-libdesc library-path library-version outfn #f
-                            (make-ctdesc include-req* import-req* visit-visit-req* visit-req* '() #t #t #f #f)
+                            (make-ctdesc include-req* import-req* visit-visit-req* visit-req* '() #t #t '() #f #f)
                             (make-rtdesc invoke-req* #t
                               (top-level-eval-hook
                                 (build-lambda no-source '()
@@ -2662,6 +2682,13 @@
                                build-void
                                (lambda ()
                                  (build-top-library/ct library-uid
+                                   ; visit-time exports (making them available for reset on visit-code failure)
+                                   (fold-left (lambda (ls x)
+                                                (let ([label (car x)] [exp (cdr x)])
+                                                  (if (and (pair? exp) (eq? (car exp) 'visit))
+                                                      (cons label ls)
+                                                      ls)))
+                                     '() env*)
                                    ; setup code
                                    `(,(build-cte-install bound-id (build-data no-source interface-binding) '*system*)
                                       ,@(if (null? env*)
@@ -4044,7 +4071,7 @@
      ;     (and <sub-version ref>*)
      ;     (or <sub-version ref>*)
      ;     (not <sub-version ref>)
-      (define (determine-module-imports what mid tid)
+      (define (determine-module-imports what who mid tid)
         (let ([binding (lookup (id->label mid empty-wrap) r)])
           (case (binding-type binding)
             [($module)
@@ -4060,7 +4087,7 @@
                (values mid tid
                  (make-import-interface x
                    (diff-marks (id-marks tid) (interface-marks (get-indirect-interface x))))))]
-            [else (syntax-error mid "unknown module")])))
+            [else (syntax-error who (format "unknown ~a" what))])))
       (define (impset x)
         (syntax-case x ()
           [(?only *x id ...)
@@ -4195,13 +4222,13 @@
                              [else (f (cdr imps) o.n* (cons a new-imps))]))))))))]
           [mid
            (and (not std?) (id? #'mid))
-           (determine-module-imports "module" #'mid #'mid)]
+           (determine-module-imports "module" #'mid #'mid #'mid)]
           [(?library-reference lr)
            (sym-kwd? ?library-reference library-reference)
            (let-values ([(mid tid) (lookup-library #'lr)])
-             (determine-module-imports "library" mid tid))]
+             (determine-module-imports "library" #'lr mid tid))]
           [lr (let-values ([(mid tid) (lookup-library #'lr)])
-                (determine-module-imports "library" mid tid))]))
+                (determine-module-imports "library" #'lr mid tid))]))
       (syntax-case impspec (for)
         [(?for *x level ...)
          (sym-kwd? ?for for)
@@ -4276,14 +4303,18 @@
                                          (append #'(old-id ...) exports)
                                          (append #'(old-id ...) exports-to-check)
                                          (fold-right resolve&add-id new-exports #'(old-id ...) #'(new-id ...)))]
-                                      [(?import impspec)
+                                      [(?import impspec ...)
                                        (sym-kwd? ?import import)
-                                       (let-values ([(mid tid imps) (help-determine-imports #'impspec r #f)])
-                                         (let ([imps (if (import-interface? imps) (module-exports imps) imps)])
-                                           (values
-                                             (append (map car imps) exports)
-                                             exports-to-check
-                                             (fold-right add-id new-exports (map cdr imps)))))]
+                                       (let process-impspecs ([impspec* #'(impspec ...)])
+                                         (if (null? impspec*)
+                                             (values exports exports-to-check new-exports)
+                                             (let-values ([(_mid _tid imps) (help-determine-imports (car impspec*) r #f)]
+                                                          [(exports exports-to-check new-exports) (process-impspecs (cdr impspec*))])
+                                               (let ([imps (if (import-interface? imps) (module-exports imps) imps)])
+                                                 (values
+                                                  (append (map car imps) exports)
+                                                  exports-to-check
+                                                  (fold-right add-id new-exports (map cdr imps)))))))]
                                       [_ (syntax-error x "invalid export spec")])))))])
               (g (cdr expspec**) exports exports-to-check new-exports))))))
 )
@@ -4624,11 +4655,12 @@
         (when desc (put-library-descriptor uid desc)))))
 
   (define-who install-library/ct-code
-    (lambda (uid import-code visit-code)
+    (lambda (uid export-id* import-code visit-code)
       (let ([desc (get-library-descriptor uid)])
         (unless desc (sorry! who "unable to install visit code for non-existent library ~s" uid))
         (let ([ctdesc (libdesc-ctdesc desc)])
           (unless ctdesc (sorry! who "unable to install visit code for revisit-only library ~s" uid))
+          (ctdesc-export-id*-set! ctdesc export-id*)
           (ctdesc-import-code-set! ctdesc import-code)
           (ctdesc-visit-code-set! ctdesc visit-code)))))
 
@@ -4787,7 +4819,14 @@
                                            found-uid)]
                                         [else ($oops #f "re~:[loading~;compiling~] ~a did not define library ~s" compile-file? src-path path)])])
                              (parameterize ([source-directories (cons (path-parent src-path) (source-directories))])
-                               ($load-library obj-path (if ct? 'load 'revisit)))
+                               (guard (c [(and (irritants-condition? c) (member obj-path (condition-irritants c)))
+                                          (with-message (with-output-to-string
+                                                          (lambda ()
+                                                            (display-string "failed to load object file: ")
+                                                            (display-condition c)))
+                                            ($oops/c #f ($make-recompile-condition path)
+                                              "problem loading object file ~a ~s" obj-path c))])
+                                 ($load-library obj-path (if ct? 'load 'revisit))))
                              (cond
                                [(search-loaded-libraries path) =>
                                 (lambda (found-uid)
@@ -5062,7 +5101,8 @@
                 [(#t) (void)]
                 [(#f)
                  (libdesc-loaded-invoke-reqs-set! desc 'pending)
-                 (for-each (make-load-req load-invoke-library path) (libdesc-invoke-req* desc))
+                 (on-reset (libdesc-loaded-invoke-reqs-set! desc #f)
+                   (for-each (make-load-req load-invoke-library path) (libdesc-invoke-req* desc)))
                  (libdesc-loaded-invoke-reqs-set! desc #t)]
                 [(pending) ($oops #f "cyclic dependency involving invocation of library ~s" (libdesc-path desc))]))))))
     (define load-visit-library
@@ -5076,8 +5116,9 @@
                 [(#t) (void)]
                 [(#f)
                  (libdesc-loaded-visit-reqs-set! desc 'pending)
-                 (for-each (make-load-req load-visit-library path) (libdesc-visit-visit-req* desc))
-                 (for-each (make-load-req load-invoke-library path) (libdesc-visit-req* desc))
+                 (on-reset (libdesc-loaded-visit-reqs-set! desc #f)
+                   (for-each (make-load-req load-visit-library path) (libdesc-visit-visit-req* desc))
+                   (for-each (make-load-req load-invoke-library path) (libdesc-visit-req* desc)))
                  (libdesc-loaded-visit-reqs-set! desc #t)]
                 [(pending) ($oops #f "cyclic dependency involving visit of library ~s" (libdesc-path desc))]))))))
     (define load-import-library
@@ -5091,7 +5132,8 @@
                 [(#t) (void)]
                 [(#f)
                  (libdesc-loaded-import-reqs-set! desc 'pending)
-                 (for-each (make-load-req load-import-library path) (libdesc-import-req* desc))
+                 (on-reset (libdesc-loaded-import-reqs-set! desc #f)
+                   (for-each (make-load-req load-import-library path) (libdesc-import-req* desc)))
                  (libdesc-loaded-import-reqs-set! desc #t)]
                 [(pending) ($oops #f "cyclic dependency involving import of library ~s" (libdesc-path desc))]))))))
     (define import-library
@@ -5105,10 +5147,11 @@
                    (when (eq? p 'loading)
                      ($oops #f "attempt to import library ~s while it is still being loaded" (libdesc-path desc)))
                   (libdesc-import-code-set! desc #f)
-                  (for-each (lambda (req) (import-library (libreq-uid req))) (libdesc-import-req* desc))
-                  ($install-library-clo-info (libdesc-clo* desc))
-                  (libdesc-clo*-set! desc '())
-                  (p))]))]
+                  (on-reset (libdesc-import-code-set! desc p)
+                    (for-each (lambda (req) (import-library (libreq-uid req))) (libdesc-import-req* desc))
+                    ($install-library-clo-info (libdesc-clo* desc))
+                    (libdesc-clo*-set! desc '())
+                    (p)))]))]
           [else ($oops #f "library ~:s is not defined" uid)])))
   
     ; invoking or visiting a possibly unloaded library occurs in two separate steps:
@@ -5193,16 +5236,22 @@
             (let ([ofn-mod-time (file-modification-time ofn)])
               (if (time>=? ofn-mod-time (with-new-who who (lambda () (file-modification-time ifn))))
                   (with-message "object file is not older"
-                    (let ([rcinfo* (load-recompile-info who ofn)])
-                      (if (andmap
-                            (lambda (rcinfo)
-                              (andmap
-                                (lambda (x)
-                                  (with-source-path who x
-                                    (lambda (x)
-                                      (time<=? (with-new-who who (lambda () (file-modification-time x))) ofn-mod-time))))
-                                (recompile-info-include-req* rcinfo)))
-                            rcinfo*)
+                    (let ([rcinfo* (guard (c [else (with-message (with-output-to-string
+                                                                   (lambda ()
+                                                                     (display-string "failed to process object file: ")
+                                                                     (display-condition c)))
+                                                     #f)])
+                                     (load-recompile-info who ofn))])
+                      (if (and rcinfo*
+                               (andmap
+                                 (lambda (rcinfo)
+                                   (andmap
+                                     (lambda (x)
+                                       (with-source-path who x
+                                         (lambda (x)
+                                           (time<=? (with-new-who who (lambda () (file-modification-time x))) ofn-mod-time))))
+                                     (recompile-info-include-req* rcinfo)))
+                                 rcinfo*))
                           (if (compile-imported-libraries)
                               (guard (c [(and ($recompile-condition? c) (eq? ($recompile-importer-path c) #f))
                                          (with-message (format "recompiling ~s because a dependency has changed" ifn)
@@ -5240,9 +5289,10 @@
       (build-lambda no-source '() body))))
 
 (set-who! $build-install-library/ct-code
-  (lambda (uid import-code visit-code)
+  (lambda (uid export-id* import-code visit-code)
     (build-primcall no-source 3 '$install-library/ct-code
       (build-data no-source uid)
+      (build-data no-source export-id*)
       import-code
       visit-code)))
 
@@ -5372,7 +5422,7 @@
           (library/ct-info-visit-visit-req* linfo/ct)
           (library/ct-info-visit-req* linfo/ct)
           (library/ct-info-clo* linfo/ct)
-          #f #f 'loading 'loading)))))
+          #f #f '() 'loading 'loading)))))
 
 (set! $install-library/rt-desc
   (lambda (linfo/rt for-import? ofn)
@@ -5384,8 +5434,8 @@
         uid ofn (make-rtdesc (library/rt-info-invoke-req* linfo/rt) #f 'loading)))))
 
 (set! $install-library/ct-code
-  (lambda (uid import-code visit-code)
-    (install-library/ct-code uid import-code visit-code)))
+  (lambda (uid export-id* import-code visit-code)
+    (install-library/ct-code uid export-id* import-code visit-code)))
 
 (set! $install-library/rt-code
   (lambda (uid invoke-code)
@@ -5461,7 +5511,7 @@
     (lambda (path uid)
       (install-library path uid
         (make-libdesc path (if (eq? (car path) 'rnrs) '(6) '()) #f #t
-          (make-ctdesc '() '() '() '() '() #t #t #f #f)
+          (make-ctdesc '() '() '() '() '() #t #t '() #f #f)
           (make-rtdesc '() #t #f)))))
   (set! $make-base-modules
     (lambda ()
@@ -5974,9 +6024,9 @@
 (global-extend 'core '$foreign-procedure
   (lambda (e r w ae)
     (syntax-case e ()
-      ((_ conv foreign-name foreign-addr (arg ...) result)
+      ((_ conv* foreign-name foreign-addr (arg ...) result)
        (build-foreign-procedure ae
-         (strip (syntax conv) w)
+         (strip (syntax conv*) w)
          (strip (syntax foreign-name) w)
          (chi (syntax foreign-addr) r w)
          (map (lambda (x) (strip x w)) (syntax (arg ...)))
@@ -5985,9 +6035,9 @@
 (global-extend 'core '$foreign-callable
   (lambda (e r w ae)
     (syntax-case e ()
-      ((_ conv proc (arg ...) result)
+      ((_ conv* proc (arg ...) result)
        (build-foreign-callable ae
-         (strip (syntax conv) w)
+         (strip (syntax conv*) w)
          (chi (syntax proc) r w)
          (map (lambda (x) (strip x w)) (syntax (arg ...)))
          (strip (syntax result) w))))))
@@ -6416,15 +6466,15 @@
   (lambda (x p wr)
     (define get-source
       (lambda (src)
-        (let ([sfd (source-sfd src)] [fp (source-bfp src)])
-          (call-with-values
-            (lambda () ($locate-source sfd fp))
-            (case-lambda
-              [() (format "[char ~a of ~a]"
-                    fp
-                    (source-file-descriptor-name sfd))]
-              [(path line char)
-               (format "[line ~a, char ~a of ~a]" line char path)])))))
+        (call-with-values
+          (lambda () ((current-locate-source-object-source) src #t #t))
+          (case-lambda
+            [() (let ([sfd (source-sfd src)] [fp (source-bfp src)])
+                  (format "[char ~a of ~a]"
+                          fp
+                          (source-file-descriptor-name sfd)))]
+            [(path line char)
+             (format "[line ~a, char ~a of ~a]" line char path)]))))
     (display "#<syntax " p)
     (wr (syntax->datum x) p)
     (let f ([x x])
@@ -7243,7 +7293,7 @@
             #;[(e0) (make-clause clause #'e0)]
             [(e0 => e1) (make-clause clause #'e1)]
             [(e0 e1 e2 ...) (make-clause clause #'e1)]
-            [_ (syntax-error "invalid exclusive-cond clause" clause)]))
+            [_ (syntax-error clause "invalid exclusive-cond clause")]))
         (define (sort-em clause*)
           (if sort?
               (sort (lambda (cl1 cl2) (> (clause-weight cl1) (clause-weight cl2)))
@@ -7252,7 +7302,7 @@
         #`(cond #,@(map clause-clause (sort-em (map parse-clause clause*))) . #,els?)))
     (syntax-case x (else)
       [(_ m1 ... [else e1 e2 ...]) (helper #'(m1 ...) #'([else e1 e2 ...]))]
-      [(_ m1 ...) (helper #'(m1 ...) #'())])))
+      [(_ m1 m2 ...) (helper #'(m1 m2 ...) #'())])))
 
 (define-syntax do
    (lambda (orig-x)
@@ -7520,62 +7570,71 @@
 
 (define-syntax $case
   (lambda (x)
+    (define-record-type clause
+      (nongenerative)
+      (fields (mutable keys) (immutable body)))
+    (define parse-clause
+      (lambda (atomic-keys?)
+        (lambda (clause)
+          (syntax-case clause ()
+            ; a case clause eventually expands into an exclusive-cond clause.  the e1 e2 ... body
+            ; structure must remain intact so exclusive-cond can use e1's profile count, if any,
+            ; to determine the clause's position in the output.  but naively leaving e1 e2 ...
+            ; in place results in case inappropriately supporting cond's => syntax, so we explicitly
+            ; weed out uses of => here.
+            [(k arrow e1 e2 ...)
+             (and (identifier? #'arrow) (free-identifier=? #'arrow #'=>))
+             (syntax-error #'arrow "misplaced aux keyword")]
+            [((k ...) e1 e2 ...) (make-clause #'(k ...) #'(e1 e2 ...))]
+            [(k e1 e2 ...) atomic-keys? (make-clause #'(k) #'(e1 e2 ...))]
+            [_ (syntax-error clause "invalid case clause")]))))
+    (define trim-keys!
+      (let ([ht (make-hashtable equal-hash equal?)])
+        (lambda (clause)
+          ; remove keys already seen in the same or a previous clause.  we must remove
+          ; keys seen in a previous clause before expanding to exclusive-cond, which
+          ; might reorder clauses, and removing those in the same clause doesn't do any
+          ; harm and might be beneficial if the compiler doesn't do it for us.
+          (clause-keys-set! clause
+            (let f ([keys (clause-keys clause)])
+              (if (null? keys)
+                  '()
+                  (let ([key (car keys)])
+                    (let ([datum-key (syntax->datum key)])
+                      (if (hashtable-ref ht datum-key #f)
+                          (f (cdr keys))
+                          (begin
+                            (hashtable-set! ht datum-key #t)
+                            (cons key (f (cdr keys)))))))))))))
     (define helper
-      (lambda (mem key-expr clause* els?)
-        (define-record-type clause
-          (nongenerative)
-          (fields (mutable keys) (immutable body)))
-        (define parse-clause
-          (lambda (clause)
-            (syntax-case clause ()
-              [((k ...) e1 e2 ...) (make-clause #'(k ...) #'(e1 e2 ...))]
-              [(k e1 e2 ...) (make-clause #'(k) #'(e1 e2 ...))]
-              [_ (syntax-error "invalid case clause" clause)])))
-        (define emit
-          (lambda (kcond clause*)
-            #`(let ([t #,key-expr])
-                (#,kcond
-                  #,@(map (lambda (clause)
-                            #`[(#,mem t '#,(clause-keys clause)) #,@(clause-body clause)])
-                       clause*)
-                  . #,els?))))
-        (let ([clause* (map parse-clause clause*)])
-          (if ($profile-source-data?)
-              (let ()
-                (define ht (make-hashtable equal-hash equal?))
-                (define trim-keys!
-                  (lambda (clause)
-                    (clause-keys-set! clause
-                      (let f ([keys (clause-keys clause)])
-                        (if (null? keys)
-                            '()
-                            (let ([key (car keys)])
-                              (let ([datum-key (syntax->datum key)])
-                                (if (hashtable-ref ht datum-key #f)
-                                    (f (cdr keys))
-                                    (begin
-                                      (hashtable-set! ht datum-key #t)
-                                      (cons key (f (cdr keys))))))))))))
-                (for-each trim-keys! clause*)
-                (emit #'exclusive-cond clause*))
-              (emit #'cond clause*)))))
+      (lambda (mem atomic-keys? key-expr clause* else*)
+        (let ([clause* (map (parse-clause atomic-keys?) clause*)])
+          (for-each trim-keys! clause*)
+          #`(let ([t #,key-expr])
+             (exclusive-cond
+               #,@(map (lambda (clause)
+                         ; the compiler reduces memv or member calls like those we produce here
+                         ; to less expensive code (using memq or eqv? or eq?) when the elements
+                         ; of the constant second argument (keys in this case) allow.
+                         #`[(#,mem t '#,(clause-keys clause)) #,@(clause-body clause)])
+                    ; we could remove keyless clauses here but don't because that would suppress
+                    ; various compile-time errors in the clause body.  cp0 will optimize away the
+                    ; code we produce for keyless clauses anyway.
+                    clause*)
+               #,@else*)))))
     (syntax-case x (else)
-      [(_ mem e clause ... [else e1 e2 ...])
-       (helper #'mem #'e #'(clause ...) #'([else e1 e2 ...]))]
-      [(_ mem e clause ...)
-       (helper #'mem #'e #'(clause ...) #'())])))
+      [(_ mem atomic-keys? e clause ... [else e1 e2 ...])
+       (helper #'mem (datum atomic-keys?) #'e #'(clause ...) #'([else e1 e2 ...]))]
+      [(_ mem atomic-keys? e clause1 clause2 ...)
+       (helper #'mem (datum atomic-keys?) #'e #'(clause1 clause2 ...) #'())])))
 
 (define-syntax r6rs:case
- ; case in Chez Scheme allows atomic keys.  rule them out here.
-  (syntax-rules (else)
-    [(_ e [(k** ...) e1* e2* ...] ... [else e1 e2 ...])
-     ($case memv e [(k** ...) e1* e2* ...] ... [else e1 e2 ...])]
-    [(_ e [(k** ...) e1* e2* ...] ...)
-     ($case memv e [(k** ...) e1* e2* ...] ...)]))
+  (syntax-rules ()
+    [(_ e clause1 clause2 ...) ($case memv #f e clause1 clause2 ...)]))
 
 (define-syntax case
   (syntax-rules ()
-    [(_ e clause ...) ($case member e clause ...)]))
+    [(_ e clause1 clause2 ...) ($case member #t e clause1 clause2 ...)]))
 
 ;;; case aux keywords
 #;(define-syntax else ; defined above for cond
@@ -7848,14 +7907,15 @@
     (syntax-case x ()
       [(_ () expr)
        (if (= (optimize-level) 3)
-           #'(begin expr (void))
-           #`(call-with-values
-               (lambda () expr)
-               (case-lambda
-                 [() (void)]
-                 [args #,($make-source-oops #'define-values
-                           "incorrect number of values from rhs"
-                           #'expr)])))]
+           #'(define unused (begin expr (void)))
+           #`(define unused
+               (call-with-values
+                 (lambda () expr)
+                 (case-lambda
+                   [() (void)]
+                   [args #,($make-source-oops #'define-values
+                             "incorrect number of values from rhs"
+                             #'expr)]))))]
       [(_ (x) expr)
        (identifier? #'x)
        (if (= (optimize-level) 3)
@@ -8485,7 +8545,9 @@
           (constant-case native-endianness
             [(little) 'utf-32le]
             [(big) 'utf-32be])])]
-      [else (and ($ftd? type) type)])))
+      [else
+       (and (or ($ftd? type) ($ftd-as-box? type))
+            type)])))
 
 (define $fp-type->pred
   (lambda (type)
@@ -8511,30 +8573,51 @@
          [else ($oops '$fp-type->pred "unrecognized type ~s" type)])])))
 
 (define $filter-conv
-  (lambda (who conv)
+  (lambda (who conv*)
     (define squawk
       (lambda (x)
         (syntax-error x (format "invalid ~s convention" who))))
-    (let ([c (syntax->datum conv)])
-      (if (not c)
-          #f
-          (case ($target-machine)
-            [(i3nt ti3nt)
-             (case c
-               [(__stdcall) #'i3nt-stdcall]
-               [(__cdecl) #f]
-               [(__com) #'i3nt-com]
-               [else (squawk conv)])]
-            [(ppcnt)
-             (case c
-               [(__stdcall __cdecl) #f]
-               [else (squawk conv)])]
-            [else (squawk conv)])))))
+    (let loop ([conv* conv*] [accum '()] [keep-accum '()])
+      (cond
+        [(null? conv*) (datum->syntax #'filter-conv keep-accum)]
+        [else
+         (let* ([orig-c (car conv*)]
+                [c (syntax->datum orig-c)]
+                [c (cond
+                     [(not c) #f]
+                     [(eq? c '__collect_safe) 'adjust-active]
+                     [else
+                      (case ($target-machine)
+                        [(i3nt ti3nt)
+                         (case c
+                           [(__stdcall) 'i3nt-stdcall]
+                           [(__cdecl) #f]
+                           [(__com) 'i3nt-com]
+                           [else (squawk orig-c)])]
+                        [(ppcnt)
+                         (case c
+                           [(__stdcall __cdecl) #f]
+                           [else (squawk orig-c)])]
+                        [else (squawk orig-c)])])])
+           (when (member c accum)
+             (syntax-error orig-c (format "redundant ~s convention" who)))
+           (unless (or (null? accum)
+                       (eq? c 'adjust-active)
+                       (and (eq? 'adjust-active (car accum))
+                            (null? (cdr accum))))
+             (syntax-error orig-c (format "conflicting ~s convention" who)))
+           (loop (cdr conv*) (cons c accum)
+                 (if c
+                     (cons c keep-accum)
+                     keep-accum)))]))))
 
 (define $make-foreign-procedure
-  (lambda (conv foreign-name ?foreign-addr type* result-type)
+  (lambda (who conv* foreign-name ?foreign-addr type* result-type)
     (let ([unsafe? (= (optimize-level) 3)])
-      (with-syntax ([conv conv]
+      (define (check-strings-allowed)
+        (when (memq 'adjust-active (syntax->datum conv*))
+          ($oops who "string argument not allowed with __collect_safe procedure")))
+      (with-syntax ([conv* conv*]
                     [foreign-name foreign-name]
                     [?foreign-addr ?foreign-addr]
                     [(t ...) (generate-temporaries type*)])
@@ -8576,6 +8659,7 @@
                                                             (err ($moi) x))))
                                                (unsigned-32))])]
                                    [(utf-8)
+                                    (check-strings-allowed)
                                     #`(()
                                        ((if (eq? x #f)
                                             x
@@ -8586,6 +8670,7 @@
                                                         (err ($moi) x)))))
                                        (u8*))]
                                    [(utf-16le)
+                                    (check-strings-allowed)
                                     #`(()
                                        ((if (eq? x #f)
                                             x
@@ -8596,6 +8681,7 @@
                                                         (err ($moi) x)))))
                                        (u16*))]
                                    [(utf-16be)
+                                    (check-strings-allowed)
                                     #`(()
                                        ((if (eq? x #f)
                                             x
@@ -8606,6 +8692,7 @@
                                                         (err ($moi) x)))))
                                        (u16*))]
                                    [(utf-32le)
+                                    (check-strings-allowed)
                                     #`(()
                                        ((if (eq? x #f)
                                             x
@@ -8616,6 +8703,7 @@
                                                         (err ($moi) x)))))
                                        (u32*))]
                                    [(utf-32be)
+                                    (check-strings-allowed)
                                     #`(()
                                        ((if (eq? x #f)
                                             x
@@ -8626,10 +8714,11 @@
                                                         (err ($moi) x)))))
                                        (u32*))]
                                    [else #f])
-                                 (if ($ftd? type)
-                                     #`(#,(if unsafe? #'() #`((unless (record? x '#,type) (err ($moi) x))))
-                                        (x)
-                                        (#,type))
+                                 (if (or ($ftd? type) ($ftd-as-box? type))
+                                     (let ([ftd (if ($ftd? type) type (unbox type))])
+                                       #`(#,(if unsafe? #'() #`((unless (record? x '#,ftd) (err ($moi) x))))
+                                          (x)
+                                          (#,type)))
                                      (with-syntax ([pred (datum->syntax #'foreign-procedure ($fp-type->pred type))]
                                                    [type (datum->syntax #'foreign-procedure type)])
                                        #`(#,(if unsafe? #'() #'((unless (pred x) (err ($moi) x))))
@@ -8661,15 +8750,36 @@
                          [(unsigned-48) #`((lambda (x) (mod x #x1000000000000)) unsigned-64)]
                          [(integer-56) #`((lambda (x) (mod0 x #x100000000000000)) integer-64)]
                          [(unsigned-56) #`((lambda (x) (mod x #x100000000000000)) unsigned-64)]
-                         [else #`(values #,(datum->syntax #'foreign-procedure result-type))])])
-          #`(let ([p ($foreign-procedure conv foreign-name ?foreign-addr (arg ... ...) result)]
+                         [else
+                          (cond
+                            [($ftd-as-box? result-type)
+                             ;; Return void, since an extra first argument receives the result,
+                             ;; but tell `$foreign-procedure` that the result is actually an & form
+                             #`((lambda (r) (void)) #,(datum->syntax #'foreign-procedure result-type))]
+                            [else
+                             #`(values #,(datum->syntax #'foreign-procedure result-type))])])]
+                      [([extra ...] [extra-arg ...] [extra-check ...])
+                       ;; When the result type is `(& <ftype>)`, the `$foreign-procedure` result
+                       ;; expects an extra argument as a `(* <ftype>)` that it uses to store the
+                       ;; foreign-procedure result, and it returns void. The extra argument is made
+                       ;; explicit for `$foreign-procedure`, and the return type is preserved as-is
+                       ;; to let `$foreign-procedure` know that it needs to fill the first argument.
+                       (cond
+                         [($ftd-as-box? result-type)
+                          #`([&-result]
+                             [#,(unbox result-type)]
+                             #,(if unsafe?
+                                   #`[]
+                                   #`[(unless (record? &-result '#,(unbox result-type)) (err ($moi) &-result))]))]
+                         [else #'([] [] [])])])
+          #`(let ([p ($foreign-procedure conv* foreign-name ?foreign-addr (extra-arg ... arg ... ...) result)]
                   #,@(if unsafe?
                          #'()
                          #'([err (lambda (who x)
                                    ($oops (or who foreign-name)
                                      "invalid foreign-procedure argument ~s"
                                      x))])))
-              (lambda (t ...) check ... ... (result-filter (p actual ... ...)))))))))
+              (lambda (extra ... t ...) extra-check ... check ... ... (result-filter (p extra ... actual ... ...)))))))))
 
 (define-syntax foreign-procedure
   (lambda (x)
@@ -8679,25 +8789,29 @@
           (or ($fp-filter-type ($expand-fp-ftype 'foreign-procedure what r x) result?)
               (syntax-error x (format "invalid foreign-procedure ~s type specifier" what))))))
     (syntax-case x ()
-      [(_ ?name (arg ...) result)
-       #'(foreign-procedure #f ?name (arg ...) result)]
-      [(_ conv ?name (arg ...) result)
+      [(_ c ... ?name (arg ...) result)
        (lambda (r)
-         ($make-foreign-procedure
-           ($filter-conv 'foreign-procedure #'conv)
+         ($make-foreign-procedure 'foreign-procedure
+           ($filter-conv 'foreign-procedure #'(c ...))
            (let ([x (datum ?name)]) (and (string? x) x))
            #'($foreign-entry ?name)
            (map (lambda (x) (filter-type r x #f)) #'(arg ...))
            (filter-type r #'result #t)))])))
 
 (define $make-foreign-callable
-  (lambda (who conv ?proc type* result-type)
-    (when (eq? conv 'i3nt-com) ($oops who "unsupported convention ~s" conv))
+  (lambda (who conv* ?proc type* result-type)
+    (for-each (lambda (c)
+                (when (eq? (syntax->datum c) 'i3nt-com)
+                  ($oops who "unsupported convention ~s" c)))
+              (syntax->list conv*))
     (let ([unsafe? (= (optimize-level) 3)])
-      (with-syntax ([conv conv] [?proc ?proc])
+      (define (check-strings-allowed)
+        (when (memq 'adjust-active (syntax->datum conv*))
+          ($oops who "string result not allowed with __collect_safe callable")))
+      (with-syntax ([conv* conv*] [?proc ?proc])
         (with-syntax ([((actual (t ...) (arg ...)) ...)
                        (map
-                         (lambda (type)
+                        (lambda (type)
                            (or (case type
                                  [(boolean)
                                   (with-syntax ([(x) (generate-temporaries #'(*))])
@@ -8787,12 +8901,13 @@
                                (with-syntax ([(x) (generate-temporaries #'(*))])
                                  #`(x (x) (#,(datum->syntax #'foreign-callable type))))))
                          type*)]
-                      [(result-filter result)
+                      [(result-filter result [extra-arg ...] [extra ...])
                        (case result-type
                          [(boolean) #`((lambda (x) (if x 1 0))
                                        #,(constant-case int-bits
                                            [(32) #'integer-32]
-                                           [(64) #'integer-64]))]
+                                           [(64) #'integer-64])
+                                       [] [])]
                          [(char)
                           #`((lambda (x)
                                #,(if unsafe?
@@ -8801,7 +8916,8 @@
                                                 (let ([x (char->integer x)])
                                                   (and (fx<= x #xff) x)))
                                            (err x))))
-                             unsigned-8)]
+                             unsigned-8
+                             [] [])]
                          [(wchar)
                           (constant-case wchar-bits
                             [(16) #`((lambda (x)
@@ -8811,15 +8927,18 @@
                                                         (let ([x (char->integer x)])
                                                           (and (fx<= x #xffff) x)))
                                                    (err x))))
-                                     unsigned-16)]
+                                     unsigned-16
+                                     [] [])]
                             [(32) #`((lambda (x)
                                        #,(if unsafe?
                                              #'(char->integer x)
                                              #'(if (char? x)
                                                    (char->integer x)
                                                    (err x))))
-                                     unsigned-16)])]
+                                     unsigned-16
+                                     [] [])])]
                          [(utf-8)
+                          (check-strings-allowed)
                           #`((lambda (x)
                                (if (eq? x #f)
                                    x
@@ -8828,8 +8947,10 @@
                                          #'(if (string? x)
                                                ($fp-string->utf8 x)
                                                (err x)))))
-                             u8*)]
+                             u8*
+                             [] [])]
                          [(utf-16le)
+                          (check-strings-allowed)
                           #`((lambda (x)
                                (if (eq? x #f)
                                    x
@@ -8838,8 +8959,10 @@
                                          #'(if (string? x)
                                                ($fp-string->utf16 x 'little)
                                                (err x)))))
-                             u16*)]
+                             u16*
+                             [] [])]
                          [(utf-16be)
+                          (check-strings-allowed)
                           #`((lambda (x)
                                (if (eq? x #f)
                                    x
@@ -8848,8 +8971,10 @@
                                          #'(if (string? x)
                                                ($fp-string->utf16 x 'big)
                                                (err x)))))
-                             u16*)]
+                             u16*
+                             [] [])]
                          [(utf-32le)
+                          (check-strings-allowed)
                           #`((lambda (x)
                                (if (eq? x #f)
                                    x
@@ -8858,8 +8983,10 @@
                                          #'(if (string? x)
                                                ($fp-string->utf32 x 'little)
                                                (err x)))))
-                             u32*)]
+                             u32*
+                             [] [])]
                          [(utf-32be)
+                          (check-strings-allowed)
                           #`((lambda (x)
                                (if (eq? x #f)
                                    x
@@ -8868,31 +8995,47 @@
                                          #'(if (string? x)
                                                ($fp-string->utf32 x 'big)
                                                (err x)))))
-                             u32*)]
+                             u32*
+                             [] [])]
                          [else
-                           (if ($ftd? result-type)
-                               (with-syntax ([type (datum->syntax #'foreign-callable result-type)])
-                                 #`((lambda (x)
-                                      #,@(if unsafe? #'() #'((unless (record? x 'type) (err x))))
-                                      x)
-                                    type))
-                               (with-syntax ([pred (datum->syntax #'foreign-callable ($fp-type->pred result-type))]
-                                             [type (datum->syntax #'foreign-callable result-type)])
-                                 #`((lambda (x)
-                                      #,@(if unsafe? #'() #'((unless (pred x) (err x))))
-                                      x)
-                                    type)))])])
-          ; use a gensym to avoid giving the procedure a confusing namej
+                          (cond
+                            [($ftd? result-type)
+                             (with-syntax ([type (datum->syntax #'foreign-callable result-type)])
+                               #`((lambda (x)
+                                    #,@(if unsafe? #'() #'((unless (record? x 'type) (err x))))
+                                    x)
+                                  type
+                                  [] []))]
+                            [($ftd-as-box? result-type)
+                             ;; callable receives an extra pointer argument to fill with the result;
+                             ;; we add this type to `$foreign-callable` as an initial address argument,
+                             ;; which may be actually provided by the caller or synthesized by the
+                             ;; back end, depending on the type and architecture
+                             (with-syntax ([type (datum->syntax #'foreign-callable result-type)]
+                                           [ftd (datum->syntax #'foreign-callable (unbox result-type))])
+                               #`((lambda (x) (void)) ; callable result is ignored
+                                  type
+                                  [ftd]
+                                  [&-result]))]
+                            [else
+                             (with-syntax ([pred (datum->syntax #'foreign-callable ($fp-type->pred result-type))]
+                                           [type (datum->syntax #'foreign-callable result-type)])
+                               #`((lambda (x)
+                                    #,@(if unsafe? #'() #'((unless (pred x) (err x))))
+                                    x)
+                                  type
+                                  [] []))])])])
+          ; use a gensym to avoid giving the procedure a confusing name
           (with-syntax ([p (datum->syntax #'foreign-callable (gensym))])
-            #`($foreign-callable conv
+            #`($foreign-callable conv*
                 (let ([p ?proc])
                   (define (err x)
                     ($oops 'foreign-callable
                       "invalid return value ~s from ~s"
                       x p))
                   #,@(if unsafe? #'() #'((unless (procedure? p) ($oops 'foreign-callable "~s is not a procedure" p))))
-                  (lambda (t ... ...) (result-filter (p actual ...))))
-                (arg ... ...)
+                  (lambda (extra ... t ... ...) (result-filter (p extra ... actual ...))))
+                (extra-arg ... arg ... ...)
                 result)))))))
 
 (define-syntax foreign-callable
@@ -8903,12 +9046,10 @@
           (or ($fp-filter-type ($expand-fp-ftype 'foreign-callable what r x) result?)
               (syntax-error x (format "invalid foreign-callable ~s type specifier" what))))))
     (syntax-case x ()
-      [(_ proc (arg ...) result)
-       #'(foreign-callable #f proc (arg ...) result)]
-      [(_ conv ?proc (arg ...) result)
+      [(_ c ... ?proc (arg ...) result)
        (lambda (r)
          ($make-foreign-callable 'foreign-callable
-           ($filter-conv 'foreign-callable #'conv)
+           ($filter-conv 'foreign-callable #'(c ...))
            #'?proc
            (map (lambda (x) (filter-type r x #f)) #'(arg ...))
            (filter-type r #'result #t)))])))
@@ -9220,6 +9361,7 @@
         (define (parse-field x i)
           (syntax-case x (immutable mutable)
             [(immutable field-name accessor-name)
+             (and (identifier? #'field-name) (identifier? #'accessor-name))
              (make-field-desc
                (datum field-name)
                i
@@ -9227,6 +9369,7 @@
                #'accessor-name
                #f)]
             [(mutable field-name accessor-name mutator-name)
+             (and (identifier? #'field-name) (identifier? #'accessor-name) (identifier? #'mutator-name))
              (make-field-desc
                (datum field-name)
                i
@@ -9234,10 +9377,12 @@
                #'accessor-name
                #'mutator-name)]
             [(immutable field-name)
+             (identifier? #'field-name)
              (make-field-desc (datum field-name) i x
                (construct-name name name "-" #'field-name)
                #f)]
             [(mutable field-name)
+             (identifier? #'field-name)
              (make-field-desc (datum field-name) i x
                (construct-name name name "-" #'field-name)
                (construct-name name name "-" #'field-name "-set!"))]
@@ -9634,6 +9779,7 @@
 
 (let ()
   (module types (source make-source source? source-sfd source-bfp source-efp
+                 source-2d? make-source-2d source-2d-line source-2d-column
                  annotation make-annotation annotation? annotation-expression annotation-source annotation-stripped annotation-flags
                  make-source-file-descriptor source-file-descriptor source-file-descriptor? source-file-descriptor-name
                  source-file-descriptor-length source-file-descriptor-crc
@@ -9664,7 +9810,8 @@
         (wr (%annotation-stripped x) p)
         (display-string ">" p))))
   (set-who! make-source-object
-    (lambda (sfd bfp efp)
+    (case-lambda
+     [(sfd bfp efp)
       (unless (%source-file-descriptor? sfd)
         ($oops who "~s is not a source file descriptor" sfd))
       (unless (if (fixnum? bfp) (fx>= bfp 0) (and (bignum? bfp) ($bigpositive? bfp)))
@@ -9673,7 +9820,27 @@
         ($oops who "~s is not an exact nonnegative integer" efp))
       (unless (<= bfp efp)
         ($oops who "ending file position ~s is less than beginning file position ~s" efp bfp))
-      (%make-source sfd bfp efp)))
+      (%make-source sfd bfp efp)]
+     [(sfd bfp efp line column)
+      (unless (%source-file-descriptor? sfd)
+        ($oops who "~s is not a source file descriptor" sfd))
+      (unless (if (fixnum? bfp) (fx>= bfp 0) (and (bignum? bfp) ($bigpositive? bfp)))
+        ($oops who "~s is not an exact nonnegative integer" bfp))
+      (unless (if (fixnum? efp) (fx>= efp 0) (and (bignum? efp) ($bigpositive? efp)))
+        ($oops who "~s is not an exact nonnegative integer" efp))
+      (unless (if (fixnum? line) (fx>= line 1) (and (bignum? line) ($bigpositive? line)))
+        ($oops who "~s is not an exact positive integer" line))
+      (unless (if (fixnum? column) (fx>= column 1) (and (bignum? column) ($bigpositive? column)))
+        ($oops who "~s is not an exact positive integer" column))
+      (unless (<= bfp efp)
+        ($oops who "ending file position ~s is less than beginning file position ~s" efp bfp))
+      (%make-source-2d sfd bfp efp line column)]))
+  (set-who! current-make-source-object
+    (case-lambda
+     [() (or ($current-mso) make-source-object)]
+     [(x)
+      (unless (procedure? x) ($oops who "~s is not a procedure" x))
+      ($current-mso (if (eq? x make-source-object) #f x))]))
   (set-who! source-object?
     (lambda (x)
       (%source? x)))
@@ -9689,6 +9856,18 @@
     (lambda (x)
       (unless (%source? x) ($oops who "~s is not a source object" x))
       (%source-efp x)))
+  (set-who! source-object-line
+    (lambda (x)
+      (cond
+       [(%source-2d? x) (%source-2d-line x)]
+       [(%source? x) #f]
+       [else ($oops who "~s is not a source object" x)])))
+  (set-who! source-object-column
+    (lambda (x)
+      (cond
+       [(%source-2d? x) (%source-2d-column x)]
+       [(%source? x) #f]
+       [else ($oops who "~s is not a source object" x)])))
   (set-who! make-annotation
     (case-lambda
       [(expression source stripped)
@@ -9768,10 +9947,36 @@
       (unless (%source-file-descriptor? sfd) ($oops who "~s is not a source-file descriptor" sfd))
       ($open-source-file sfd)))
   (set-who! locate-source
-    (lambda (sfd fp)
-      (unless (%source-file-descriptor? sfd) ($oops who "~s is not a source-file descriptor" sfd))
-      (unless (if (fixnum? fp) (fx>= fp 0) (and (bignum? fp) ($bigpositive? fp))) ($oops who "~s is not an exact nonnegative integer" fp))
-      ($locate-source sfd fp)))
+    (rec locate-source
+      (case-lambda
+       [(sfd fp) (locate-source sfd fp #f)]
+       [(sfd fp use-cache?)
+        (unless (%source-file-descriptor? sfd) ($oops who "~s is not a source-file descriptor" sfd))
+        (unless (if (fixnum? fp) (fx>= fp 0) (and (bignum? fp) ($bigpositive? fp)))
+          ($oops who "~s is not an exact nonnegative integer" fp))
+        ($locate-source sfd fp use-cache?)])))
+  (set-who! locate-source-object-source
+    (lambda (src start? cache?)
+      (cond
+       [(and start?
+             (%source-2d? src))
+        (values (%source-file-descriptor-name (%source-sfd src))
+                (%source-2d-line src)
+                (%source-2d-column src))]
+       [(%source? src)
+        ($locate-source (%source-sfd src)
+                        (if start?
+                            (%source-bfp src)
+                            (%source-efp src))
+                        cache?)]
+       [else
+        ($oops who "~s is not a source object" src)])))
+  (set-who! current-locate-source-object-source
+    ($make-thread-parameter
+     locate-source-object-source
+     (lambda (x)
+       (unless (procedure? x) ($oops who "~s is not a procedure" x))
+       x)))
   (set-who! syntax->annotation
     (lambda (x)
       (cond

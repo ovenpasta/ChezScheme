@@ -1,5 +1,5 @@
 # Mf-base
-# Copyright 1984-2016 Cisco Systems, Inc.
+# Copyright 1984-2017 Cisco Systems, Inc.
 # 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,6 +23,9 @@ o = 3
 
 # d is the debug level at which the system should be built
 d = 0
+
+# cl (xcl) determines the commonization level
+cl = (commonization-level)
 
 # i determines whether inspector-information is generated: f for false, t for true
 i = f
@@ -61,17 +64,25 @@ pdhtml = f
 # gac determines whether cost-center allocation counts are generated: f for false, t for true
 gac = f
 
-# gac determines whether cost-center instruction counts are generated: f for false, t for true
+# gic determines whether cost-center instruction counts are generated: f for false, t for true
 gic = f
 
 # pps determines whether pass timings are printed
 pps = f
 
+# Explicit ".exe" needed for WSL
+ifeq ($(OS),Windows_NT)
+  ExeSuffix = .exe
+else
+  ExeSuffix =
+endif
+
 # The following control where files sit and typically don't need to be changed, except
 # that Scheme and SCHEMEHEAPDIRS are set by Mf-cross to point to the host Scheme
 # implementation
-Scheme = ../bin/$m/scheme
+Scheme = ../bin/$m/scheme${ExeSuffix}
 export SCHEMEHEAPDIRS=../boot/%m
+export CHEZSCHEMELIBDIRS=.
 
 # Define the libdirs separator character
 ifeq ($(OS),Windows_NT)
@@ -94,7 +105,7 @@ patch = patch
 
 # putting cpnanopass.patch early for maximum make --jobs=2 benefit
 patchobj = patch.patch cpnanopass.patch cprep.patch cpcheck.patch\
- cp0.patch cpvalid.patch cpletrec.patch\
+ cp0.patch cpvalid.patch cpcommonize.patch cpletrec.patch\
  reloc.patch\
  compile.patch fasl.patch syntax.patch env.patch\
  read.patch interpret.patch ftype.patch strip.patch\
@@ -116,7 +127,7 @@ basesrc =\
  strnum.ss bytevector.ss 5_4.ss 5_6.ss 5_7.ss\
  event.ss 4.ss front.ss foreign.ss 6.ss print.ss newhash.ss\
  format.ss date.ss 7.ss cafe.ss trace.ss engine.ss\
- interpret.ss cprep.ss cpcheck.ss cp0.ss cpvalid.ss cpletrec.ss inspect.ss\
+ interpret.ss cprep.ss cpcheck.ss cp0.ss cpvalid.ss cpcommonize.ss cpletrec.ss inspect.ss\
  enum.ss io.ss read.ss primvars.ss syntax.ss costctr.ss expeditor.ss\
  exceptions.ss pretty.ss env.ss\
  fasl.ss reloc.ss pdhtml.ss strip.ss ftype.ss back.ss
@@ -143,19 +154,23 @@ allsrc =\
 # doit uses a different Scheme process to compile each target
 doit: ${PetiteBoot} ${SchemeBoot} ${Cheader} ${Cequates}
 
-# doit uses a single Scheme process to compile all targets.  this is typically
+# all uses a single Scheme process to compile all targets.  this is typically
 # faster when most of the targets need to be recompiled.
 all: bootall ${Cheader} ${Cequates}
 
-# allx runs all up to two times and checks to see if the new boot file is the
+# allx runs all up to three times and checks to see if the new boot file is the
 # same as the last, i.e., the system is properly bootstrapped.
 allx: prettyclean saveboot
 	$(MAKE) all
 	if $(MAKE) checkboot; then echo fine ; else\
-	  $(MAKE) prettyclean saveboot &&\
-	  $(MAKE) all &&\
-	  $(MAKE) checkboot ;\
-	fi
+          $(MAKE) prettyclean saveboot &&\
+          $(MAKE) all &&\
+          if $(MAKE) checkboot; then echo fine ; else\
+            $(MAKE) prettyclean saveboot &&\
+            $(MAKE) all &&\
+            $(MAKE) checkboot ;\
+          fi\
+        fi
 	$(MAKE) restoreboot
 ifneq ($(OS),Windows_NT)
 	$(MAKE) resetbootlinks
@@ -197,6 +212,7 @@ clean: profileclean
 	echo '(reset-handler abort)'\
              '(optimize-level $o)'\
              '(debug-level $d)'\
+             '(commonization-level $(cl))'\
              '(when #$p (compile-profile (quote source)))'\
              '(when #$(bp) (compile-profile (quote block)))'\
              '(when #$(loadspd) (profile-load-data "${ProfileDumpSource}"))'\
@@ -220,6 +236,7 @@ clean: profileclean
 	echo '(reset-handler abort)'\
              '(optimize-level $o)'\
              '(debug-level $d)'\
+             '(commonization-level $(cl))'\
              '(when #$p (compile-profile (quote source)))'\
              '(when #$(bp) (compile-profile (quote block)))'\
              '(when #$(loadspd) (profile-load-data "${ProfileDumpSource}"))'\
@@ -246,6 +263,7 @@ clean: profileclean
 	     '(keyboard-interrupt-handler (lambda () (display "interrupted---aborting\n") (reset)))'\
              '(optimize-level $o)'\
              '(debug-level $d)'\
+             '(commonization-level $(cl))'\
              '(generate-inspector-information #$i)'\
              '(subset-mode (quote system))'\
              '(compile-file "$*.ss" "$*.so")'\
@@ -255,6 +273,7 @@ clean: profileclean
 	echo '(reset-handler abort)'\
              '(optimize-level $o)'\
              '(debug-level $d)'\
+             '(commonization-level $(cl))'\
              '(when #$(xp) (compile-profile (quote source)))'\
              '(when #$(xbp) (compile-profile (quote block)))'\
              '(generate-inspector-information #$i)'\
@@ -278,7 +297,7 @@ checkboot:
                  '(#%$$fasl-file-equal? "../boot/$m/sbb" "../boot/$m/petite.boot" #t)'\
                  '(#%$$fasl-file-equal? "../boot/$m/scb" "../boot/$m/scheme.boot" #t)'\
                  '(printf "bootfile comparison succeeded\n"))'\
-             | ../bin/$m/scheme -b ../boot/$m/sbb -q
+             | ../bin/$m/scheme${ExeSuffix} -b ../boot/$m/sbb -q
 
 xcheckboot: ${macroobj} ${patchfile}
 	@echo '(reset-handler abort)'\
@@ -323,6 +342,7 @@ cmacros.so: cmacros.ss machine.def layout.ss
              '(keyboard-interrupt-handler (lambda () (display "interrupted---aborting\n") (reset)))'\
              '(optimize-level $o)'\
              '(debug-level $d)'\
+             '(commonization-level $(cl))'\
              '(generate-inspector-information #$i)'\
              '(subset-mode (quote system))'\
              '(compile-file "$*.ss" "$*.so")'\
@@ -334,6 +354,7 @@ priminfo.so: priminfo.ss primdata.ss cmacros.so
              '(keyboard-interrupt-handler (lambda () (display "interrupted---aborting\n") (reset)))'\
              '(optimize-level $o)'\
              '(debug-level $d)'\
+             '(commonization-level $(cl))'\
              '(generate-inspector-information #$i)'\
              '(subset-mode (quote system))'\
              '(compile-file "$*.ss" "$*.so")'\
@@ -346,6 +367,7 @@ mkheader.so: mkheader.ss cmacros.so primvars.so env.so
              '(keyboard-interrupt-handler (lambda () (display "interrupted---aborting\n") (reset)))'\
              '(optimize-level $o)'\
              '(debug-level $d)'\
+             '(commonization-level $(cl))'\
              '(generate-inspector-information #$i)'\
              '(subset-mode (quote system))'\
              '(compile-file "$*.ss" "$*.so")'\
@@ -357,6 +379,7 @@ nanopass.so: $(shell echo ../nanopass/nanopass/*) ../nanopass/nanopass.ss
              '(keyboard-interrupt-handler (lambda () (display "interrupted---aborting\n") (reset)))'\
              '(optimize-level $o)'\
              '(debug-level $d)'\
+             '(commonization-level $(cl))'\
              '(generate-inspector-information #$i)'\
              '(collect-trip-bytes (expt 2 24))'\
              '(collect-request-handler (lambda () (collect 0 1)))'\
@@ -379,6 +402,7 @@ script.all makescript:
              '(for-each load (command-line-arguments))'\
              '(optimize-level $o)'\
              '(debug-level $d)'\
+             '(commonization-level $(cl))'\
              '(when #$p (compile-profile (quote source)))'\
              '(when #$(bp) (compile-profile (quote block)))'\
              '(when #$(loadspd) (profile-load-data "${ProfileDumpSource}"))'\
@@ -414,6 +438,7 @@ script-static.all:
              '(for-each load (command-line-arguments))'\
              '(optimize-level $o)'\
              '(debug-level $d)'\
+             '(commonization-level $(cl))'\
              '(when #$p (compile-profile (quote source)))'\
              '(when #$(bp) (compile-profile (quote block)))'\
              '(generate-inspector-information #$i)'\
@@ -435,6 +460,7 @@ script-dynamic.all:
              '(for-each load (command-line-arguments))'\
              '(optimize-level $o)'\
              '(debug-level $d)'\
+             '(commonization-level $(cl))'\
              '(when #$p (compile-profile (quote source)))'\
              '(when #$(bp) (compile-profile (quote block)))'\
              '(generate-inspector-information #$i)'\

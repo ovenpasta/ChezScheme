@@ -1,5 +1,5 @@
 /* prim5.c
- * Copyright 1984-2016 Cisco Systems, Inc.
+ * Copyright 1984-2017 Cisco Systems, Inc.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,6 +34,8 @@ static ptr s_trunc_rem PROTO((ptr x, ptr y));
 static ptr s_fltofx PROTO((ptr x));
 static ptr s_weak_cons PROTO((ptr car, ptr cdr));
 static ptr s_weak_pairp PROTO((ptr p));
+static ptr s_ephemeron_cons PROTO((ptr car, ptr cdr));
+static ptr s_ephemeron_pairp PROTO((ptr p));
 static ptr s_oblist PROTO((void));
 static ptr s_bigoddp PROTO((ptr n));
 static ptr s_float PROTO((ptr x));
@@ -57,7 +59,7 @@ static void s_set_code_long2 PROTO((ptr p, ptr n, ptr h, ptr l));
 static ptr s_set_code_quad PROTO((ptr p, ptr n, ptr x));
 static ptr s_set_reloc PROTO((ptr p, ptr n, ptr e));
 static ptr s_flush_instruction_cache PROTO((void));
-static ptr s_make_code PROTO((iptr flags, iptr free, ptr name, iptr n, ptr info, ptr pinfos));
+static ptr s_make_code PROTO((iptr flags, iptr free, ptr name, ptr arity_mark, iptr n, ptr info, ptr pinfos));
 static ptr s_make_reloc_table PROTO((ptr codeobj, ptr n));
 static ptr s_make_closure PROTO((ptr offset, ptr codeobj));
 static ptr s_fxrandom PROTO((ptr n));
@@ -122,7 +124,17 @@ ptr S_strerror(INT errnum) {
   ptr p; char *msg;
 
   tc_mutex_acquire()
-  p = (msg = strerror(errnum)) == NULL ? Sfalse : Sstring(msg);
+#ifdef WIN32
+  msg = Swide_to_utf8(_wcserror(errnum));
+  if (msg == NULL)
+    p = Sfalse;
+  else {
+    p = Sstring_utf8(msg, -1);
+    free(msg);
+  }
+#else
+  p = (msg = strerror(errnum)) == NULL ? Sfalse : Sstring_utf8(msg, -1);
+#endif
   tc_mutex_release()
   return p;
 }
@@ -176,6 +188,20 @@ static ptr s_weak_pairp(p) ptr p; {
   return Spairp(p) && (si = MaybeSegInfo(ptr_get_segment(p))) != NULL && (si->space & ~space_locked) == space_weakpair ? Strue : Sfalse;
 }
 
+static ptr s_ephemeron_cons(car, cdr) ptr car, cdr; {
+  ptr p;
+
+  tc_mutex_acquire()
+  p = S_cons_in(space_ephemeron, 0, car, cdr);
+  tc_mutex_release()
+  return p;
+}
+
+static ptr s_ephemeron_pairp(p) ptr p; {
+  seginfo *si;
+  return Spairp(p) && (si = MaybeSegInfo(ptr_get_segment(p))) != NULL && (si->space & ~space_locked) == space_ephemeron ? Strue : Sfalse;
+}
+
 static ptr s_oblist() {
   ptr ls = Snil;
   iptr idx = S_G.oblist_length;
@@ -203,7 +229,7 @@ static ptr s_decode_float(x) ptr x; {
     return S_decode_float(FLODAT(x));
 }
 
-#define FMTBUFSIZE 60
+#define FMTBUFSIZE 120
 #define CHUNKADDRLT(x, y) (((chunkinfo *)(Scar(x)))->addr < ((chunkinfo *)(Scar(y)))->addr)
 mkmergesort(sort_chunks, merge_chunks, ptr, Snil, CHUNKADDRLT, INITCDR)
 
@@ -340,15 +366,21 @@ static void s_showalloc(IBOOL show_dump, const char *outfn) {
   if (outfn == NULL) {
     out = stderr;
   } else {
+#ifdef WIN32
+    wchar_t *outfnw = Sutf8_to_wide(outfn);
+    out = _wfopen(outfnw, L"w");
+    free(outfnw);
+#else
     out = fopen(outfn, "w");
+#endif
     if (out == NULL) {
       ptr msg = S_strerror(errno);
       if (msg != Sfalse) {
         tc_mutex_release()
-        S_error2("fopen", "open of ~s failed: ~a", Sstring(outfn), msg);
+        S_error2("fopen", "open of ~s failed: ~a", Sstring_utf8(outfn, -1), msg);
       } else {
         tc_mutex_release()
-        S_error1("fopen", "open of ~s failed", Sstring(outfn));
+        S_error1("fopen", "open of ~s failed", Sstring_utf8(outfn, -1));
       }
     }
   }
@@ -585,7 +617,7 @@ static ptr s_system(const char *s) {
   if (DISABLECOUNT(tc) == FIX(0)) reactivate_thread(tc);
 #endif
 
-  if (status == -1) {
+  if ((status == -1) && (errno != 0)) {
     ptr msg = S_strerror(errno);
 
     if (msg != Sfalse)
@@ -608,12 +640,12 @@ static ptr s_process(s, stderrp) char *s; IBOOL stderrp; {
     INT ifd = -1, ofd = -1, efd = -1, child = -1;
 
 #ifdef WIN32
-/* WIN32 version courtesy of Bob Burger, burgerrg@sagian.com */
     HANDLE hToRead, hToWrite, hFromRead, hFromWrite, hFromReadErr, hFromWriteErr, hProcess;
-    STARTUPINFO si = {0};
+    STARTUPINFOW si = {0};
     PROCESS_INFORMATION pi;
     char *comspec;
     char *buffer;
+    wchar_t* bufferw;
 
     /* Create non-inheritable pipes, important to eliminate zombee children
      * when the parent sides are closed. */
@@ -624,14 +656,12 @@ static ptr s_process(s, stderrp) char *s; IBOOL stderrp; {
         CloseHandle(hToWrite);
         S_error("process", "cannot open pipes");
     }
-    if (stderrp) {
-      if (!CreatePipe(&hFromReadErr, &hFromWriteErr, NULL, 0)) {
-          CloseHandle(hToRead);
-          CloseHandle(hToWrite);
-          CloseHandle(hFromRead);
-          CloseHandle(hFromWrite);
-          S_error("process", "cannot open pipes");
-      }
+    if (stderrp && !CreatePipe(&hFromReadErr, &hFromWriteErr, NULL, 0)) {
+        CloseHandle(hToRead);
+        CloseHandle(hToWrite);
+        CloseHandle(hFromRead);
+        CloseHandle(hFromWrite);
+        S_error("process", "cannot open pipes");
     }
 
     si.cb = sizeof(STARTUPINFO);
@@ -685,13 +715,16 @@ static ptr s_process(s, stderrp) char *s; IBOOL stderrp; {
       si.hStdError = si.hStdOutput;
     }
 
-    if ((comspec = getenv("COMSPEC"))) {
-        size_t n = strlen(comspec) + strlen(s) + 5;
+    if ((comspec = Sgetenv("COMSPEC"))) {
+        size_t n = strlen(comspec) + strlen(s) + 7;
         buffer = (char *)_alloca(n);
-        snprintf(buffer, n, "%s /c %s", comspec, s);
+        snprintf(buffer, n, "\"%s\" /c %s", comspec, s);
+        free(comspec);
     } else
         buffer = s;
-    if (!CreateProcess(NULL, buffer, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+    bufferw = Sutf8_to_wide(buffer);
+    if (!CreateProcessW(NULL, bufferw, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+        free(bufferw);
         CloseHandle(si.hStdInput);
         CloseHandle(hToWrite);
         CloseHandle(hFromRead);
@@ -702,6 +735,7 @@ static ptr s_process(s, stderrp) char *s; IBOOL stderrp; {
         }
         S_error("process", "cannot spawn subprocess");
     }
+    free(bufferw);
     CloseHandle(si.hStdInput);
     CloseHandle(si.hStdOutput);
     if (stderrp) {
@@ -847,8 +881,8 @@ static ptr s_flush_instruction_cache() {
     return Svoid;
 }
 
-static ptr s_make_code(flags, free, name, n, info, pinfos)
-                       iptr flags, free, n; ptr name, info, pinfos; {
+static ptr s_make_code(flags, free, name, arity_mark, n, info, pinfos)
+                       iptr flags, free, n; ptr name, arity_mark, info, pinfos; {
     ptr co;
 
     tc_mutex_acquire()
@@ -856,6 +890,7 @@ static ptr s_make_code(flags, free, name, n, info, pinfos)
     tc_mutex_release()
     CODEFREE(co) = free;
     CODENAME(co) = name;
+    CODEARITYMASK(co) = arity_mark;
     CODEINFO(co) = info;
     CODEPINFOS(co) = pinfos;
     return co;
@@ -1314,46 +1349,40 @@ static ptr s_getenv PROTO((char *name));
 
 static ptr s_getenv(name) char *name; {
 #if defined(WIN32) && !( defined(__GNUC__) && !defined(FEATURE_PTHREADS))
-#define GETENVBUFSIZ 100
-  char buf[GETENVBUFSIZ];
-  size_t n;
-
-  n = GetEnvironmentVariable(name, buf, GETENVBUFSIZ);
-  if (n > GETENVBUFSIZ) {
-    ptr bv = S_bytevector(n);
-    n = GetEnvironmentVariable(name, &BVIT(bv,0), (DWORD)n);
-    if (n != 0) return S_string(&BVIT(bv,0), n);
-  } else if (n > 0) {
-    return S_string(buf, n);
-  }
-
-  if (getenv_s(&n, buf, GETENVBUFSIZ, name) == 0) {
-    if (n != 0) return S_string(buf, n-1);
-  } else {
-    ptr bv = S_bytevector(n);
-    if (getenv_s(&n, &BVIT(bv,0), n, name) == 0)
-      if (n != 0) return S_string(&BVIT(bv,0), n-1);
-  }
-
-  return Sfalse;
+  char *s = Sgetenv(name);
 #else /* WIN32 */
   char *s = getenv(name);
-  return s == (char *)0 ? Sfalse : S_string(s, -1);
 #endif /* WIN32 */
+  if (s == (char *)0)
+    return Sfalse;
+  else {
+    ptr r = Sstring_utf8(s, -1);
+#ifdef WIN32
+    free(s);
+#endif
+    return r;
+  }
 }
 
 static void s_putenv PROTO((char *name, char *value));
 static void s_putenv(name, value) char *name, *value; {
-  iptr n; char *s;
 #ifdef WIN32
-  if (SetEnvironmentVariable(name, value) == 0) {
+  wchar_t* namew;
+  wchar_t* valuew;
+  BOOL rc;
+  namew = Sutf8_to_wide(name);
+  valuew = Sutf8_to_wide(value);
+  rc = SetEnvironmentVariableW(namew, valuew);
+  free(namew);
+  free(valuew);
+  if (rc == 0)
     S_error1("putenv", "environment extension failed: ~a", S_LastErrorString());
-  }
-#endif /* WIN32 */
+#else /* WIN32 */
+  iptr n; char *s;
   n = strlen(name) + strlen(value) + 2;
   if ((s = malloc(n)) == (char *)NULL
        || snprintf(s, n, "%s=%s", name, value) < 0
-       || PUTENV(s) != 0) {
+       || putenv(s) != 0) {
     ptr msg = S_strerror(errno);
 
     if (msg != Sfalse)
@@ -1361,6 +1390,7 @@ static void s_putenv(name, value) char *name, *value; {
     else
       S_error("putenv", "environment extension failed");
   }
+#endif /* WIN32 */
 }
 
 #ifdef PTHREADS
@@ -1446,12 +1476,14 @@ void S_prim5_init() {
 #ifdef PTHREADS
     Sforeign_symbol("(cs)fork_thread", (void *)S_fork_thread);
     Sforeign_symbol("(cs)make_mutex", (void *)S_make_mutex);
+    Sforeign_symbol("(cs)mutex_free", (void *)S_mutex_free);
     Sforeign_symbol("(cs)backdoor_thread", (void *)s_backdoor_thread);
     Sforeign_symbol("(cs)threads", (void *)s_threads);
     Sforeign_symbol("(cs)mutex_acquire", (void *)s_mutex_acquire);
     Sforeign_symbol("(cs)mutex_release", (void *)S_mutex_release);
     Sforeign_symbol("(cs)mutex_acquire_noblock", (void *)s_mutex_acquire_noblock);
     Sforeign_symbol("(cs)make_condition", (void *)S_make_condition);
+    Sforeign_symbol("(cs)condition_free", (void *)S_condition_free);
     Sforeign_symbol("(cs)condition_broadcast", (void *)s_condition_broadcast);
     Sforeign_symbol("(cs)condition_signal", (void *)s_condition_signal);
     Sforeign_symbol("(cs)condition_wait", (void *)S_condition_wait);
@@ -1462,6 +1494,8 @@ void S_prim5_init() {
     Sforeign_symbol("(cs)s_fltofx", (void *)s_fltofx);
     Sforeign_symbol("(cs)s_weak_cons", (void *)s_weak_cons);
     Sforeign_symbol("(cs)s_weak_pairp", (void *)s_weak_pairp);
+    Sforeign_symbol("(cs)s_ephemeron_cons", (void *)s_ephemeron_cons);
+    Sforeign_symbol("(cs)s_ephemeron_pairp", (void *)s_ephemeron_pairp);
     Sforeign_symbol("(cs)continuation_depth", (void *)S_continuation_depth);
     Sforeign_symbol("(cs)single_continuation", (void *)S_single_continuation);
     Sforeign_symbol("(cs)c_exit", (void *)c_exit);
@@ -1532,6 +1566,10 @@ void S_prim5_init() {
     Sforeign_symbol("(cs)set_fd_non_blocking", (void*)S_set_fd_non_blocking);
     Sforeign_symbol("(cs)get_fd_length", (void*)S_get_fd_length);
     Sforeign_symbol("(cs)set_fd_length", (void*)S_set_fd_length);
+
+    Sforeign_symbol("(cs)bytevector_compress_size", (void*)S_bytevector_compress_size);
+    Sforeign_symbol("(cs)bytevector_compress", (void*)S_bytevector_compress);
+    Sforeign_symbol("(cs)bytevector_uncompress", (void*)S_bytevector_uncompress);
 
     Sforeign_symbol("(cs)logand", (void *)S_logand);
     Sforeign_symbol("(cs)logbitp", (void *)S_logbitp);
@@ -1879,48 +1917,49 @@ static iconv_close_ft iconv_close_f = (iconv_close_ft)0;
 #define ICONV_CLOSE iconv_close
 #endif
 
+#ifdef WIN32
+static ptr s_iconv_trouble(HMODULE h, const char *what) {
+  wchar_t dllw[PATH_MAX];
+  char *dll;
+  size_t n;
+  char *msg;
+  ptr r;
+  if (0 != GetModuleFileNameW(h, dllw, PATH_MAX))
+    dll = Swide_to_utf8(dllw);
+  else
+    dll = NULL;
+  FreeLibrary(h);
+  n = strlen(what) + strlen(dll) + 17;
+  msg = (char *)malloc(n);
+  sprintf_s(msg, n, "cannot find %s in %s", what, dll);
+  free(dll);
+  r = Sstring_utf8(msg, -1);
+  free(msg);
+  return r;
+}
+#endif /* WIN32 */
+
 static ptr s_iconv_open(const char *tocode, const char *fromcode) {
   iconv_t cd;
 #ifdef WIN32
   static int iconv_is_loaded = 0;
   if (!iconv_is_loaded) {
-    HMODULE h = LoadLibrary("iconv.dll");
-    if (h == NULL) h = LoadLibrary("libiconv.dll");
-    if (h == NULL) h = LoadLibrary("libiconv-2.dll");
-    if (h == NULL) h = LoadLibrary(".\\iconv.dll");
-    if (h == NULL) h = LoadLibrary(".\\libiconv.dll");
-    if (h == NULL) h = LoadLibrary(".\\libiconv-2.dll");
+    HMODULE h = LoadLibraryW(L"iconv.dll");
+    if (h == NULL) h = LoadLibraryW(L"libiconv.dll");
+    if (h == NULL) h = LoadLibraryW(L"libiconv-2.dll");
+    if (h == NULL) h = LoadLibraryW(L".\\iconv.dll");
+    if (h == NULL) h = LoadLibraryW(L".\\libiconv.dll");
+    if (h == NULL) h = LoadLibraryW(L".\\libiconv-2.dll");
     if (h == NULL) return Sstring("cannot load iconv.dll, libiconv.dll, or libiconv-2.dll");
     if ((iconv_open_f = (iconv_open_ft)GetProcAddress(h, "iconv_open")) == NULL &&
-        (iconv_open_f = (iconv_open_ft)GetProcAddress(h, "libiconv_open")) == NULL) {
-      const char prefix[] = "cannot find iconv_open or libiconv_open in ";
-      char msg[sizeof(prefix) - 1 + PATH_MAX];
-      strncpy(msg, prefix, sizeof(prefix));
-      strcpy(msg + sizeof(prefix) - 1, "iconv dll");
-      GetModuleFileName(h, msg + sizeof(prefix) - 1, PATH_MAX);
-      FreeLibrary(h);
-      return Sstring(msg);
-    }
+        (iconv_open_f = (iconv_open_ft)GetProcAddress(h, "libiconv_open")) == NULL)
+      return s_iconv_trouble(h, "iconv_open or libiconv_open");
     if ((iconv_f = (iconv_ft)GetProcAddress(h, "iconv")) == NULL &&
-        (iconv_f = (iconv_ft)GetProcAddress(h, "libiconv")) == NULL) {
-      const char prefix[] = "cannot find iconv or libiconv in ";
-      char msg[sizeof(prefix) - 1 + PATH_MAX];
-      strncpy(msg, prefix, sizeof(prefix));
-      strcpy(msg + sizeof(prefix) - 1, "iconv dll");
-      GetModuleFileName(h, msg + sizeof(prefix) - 1, PATH_MAX);
-      FreeLibrary(h);
-      return Sstring(msg);
-    }
+        (iconv_f = (iconv_ft)GetProcAddress(h, "libiconv")) == NULL)
+      return s_iconv_trouble(h, "iconv or libiconv");
     if ((iconv_close_f = (iconv_close_ft)GetProcAddress(h, "iconv_close")) == NULL &&
-        (iconv_close_f = (iconv_close_ft)GetProcAddress(h, "libiconv_close")) == NULL) {
-      const char prefix[] = "cannot find iconv_close or libiconv_close in ";
-      char msg[sizeof(prefix) - 1 + PATH_MAX];
-      strncpy(msg, prefix, sizeof(prefix));
-      strcpy(msg + sizeof(prefix) - 1, "iconv dll");
-      GetModuleFileName(h, msg + sizeof(prefix) - 1, PATH_MAX);
-      FreeLibrary(h);
-      return Sstring(msg);
-    }
+        (iconv_close_f = (iconv_close_ft)GetProcAddress(h, "libiconv_close")) == NULL)
+      return s_iconv_trouble(h, "iconv_close or libiconv_close");
     iconv_is_loaded = 1;
   }
 #endif /* WIN32 */

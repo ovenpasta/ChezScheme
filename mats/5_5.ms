@@ -1,5 +1,5 @@
 ;;; 5-5.ms
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -428,17 +428,31 @@
  )
 
 (mat $string-ref-check?
-  (let ([s (make-string 3)] [not-s (make-vector 3)])
+  (let ([s (make-string 3)] [imm-s (string->immutable-string (make-string 3))] [not-s (make-vector 3)])
     (let ([i-1 -1] [i0 0] [i1 1] [i2 2] [i3 3] [ifalse #f] [ibig (+ (most-positive-fixnum) 1)])
       (and
         (not (#%$string-ref-check? not-s i0))
         (not (#%$string-ref-check? s ifalse))
         (not (#%$string-ref-check? s i-1))
+        (not (#%$string-ref-check? imm-s i-1))
+        (#%$string-ref-check? s 0)
+        (#%$string-ref-check? s 1)
+        (#%$string-ref-check? s 2)
+        (#%$string-ref-check? imm-s 0)
+        (#%$string-ref-check? imm-s 1)
+        (#%$string-ref-check? imm-s 2)
         (#%$string-ref-check? s i0)
         (#%$string-ref-check? s i1)
         (#%$string-ref-check? s i2)
+        (#%$string-ref-check? imm-s i0)
+        (#%$string-ref-check? imm-s i1)
+        (#%$string-ref-check? imm-s i2)
+        (not (#%$string-ref-check? s 3))
         (not (#%$string-ref-check? s i3))
-        (not (#%$string-ref-check? s ibig)))))
+        (not (#%$string-ref-check? s ibig))
+        (not (#%$string-ref-check? imm-s 3))
+        (not (#%$string-ref-check? imm-s i3))
+        (not (#%$string-ref-check? imm-s ibig)))))
  )
 
 (mat string-ref
@@ -699,8 +713,12 @@
     (error? (substring-fill! 'a 0 1 #\a))
     (error? (substring-fill! "hi" 0 'a #\a))
     (error? (substring-fill! "hi" 1 0 #\a))
-    (equal? (substring-fill! "hitme!" 0 5 #\a) "aaaaa!")
-    (eqv? (substring-fill! "" 0 0 #\a) "")
+    (let ([s (string-copy "hitme!")])
+      (substring-fill! s 0 5 #\a)
+      (equal? s "aaaaa!"))
+    (let ([s ""])
+      (substring-fill! s 0 0 #\a)
+      (eqv? s ""))
     (let ([s (string-copy "ABCDE")])
        (and (begin
                (substring-fill! s 0 0 #\$)
@@ -731,3 +749,33 @@
     (equal? (string->list "abc") '(#\a #\b #\c))
     (equal? (string->list "") '())
  )
+
+(mat string->immutable-string
+    (begin
+      (define immutable-abc-string
+        (string->immutable-string (string #\a #\b #\c)))
+      #t)
+
+    (immutable-string? immutable-abc-string)
+    (not (mutable-string? immutable-abc-string))
+    
+    (equal? "abc" immutable-abc-string)
+    (eq? immutable-abc-string
+         (string->immutable-string immutable-abc-string))
+    
+    (not (immutable-string? (make-string 5)))
+    (mutable-string? (make-string 5))
+    
+    (immutable-string? (string->immutable-string (string)))
+    (not (mutable-string? (string->immutable-string (string))))
+    (not (immutable-string? (string)))
+    (mutable-string? (string))
+    
+    (not (immutable-string? (string-copy immutable-abc-string)))
+
+    (error? (string-set! immutable-abc-string 0 #\a))
+    (error? (string-fill! immutable-abc-string #\a))
+    (error? (substring-fill! immutable-abc-string 0 1 #\a))
+    (error? (string-copy! "xyz" 0 immutable-abc-string 0 3))
+    (error? (string-truncate! immutable-abc-string 1))
+)

@@ -1,4 +1,4 @@
-% Copyright 2005-2016 Cisco Systems, Inc.
+% Copyright 2005-2017 Cisco Systems, Inc.
 % 
 % Licensed under the Apache License, Version 2.0 (the "License");
 % you may not use this file except in compliance with the License.
@@ -287,7 +287,7 @@ The first form is identical to the Revised$^6$ Report \scheme{dynamic-wind}.
 When the optional \var{critical?} argument is present and non-false,
 the \var{in} thunk is invoked in a critical section along with the code
 that records that the body has been entered, and the \var{out} thunk is
-invoked in a critical section section along with the code that records
+invoked in a critical section along with the code that records
 that the body has been exited.
 Extreme caution must be taken with this form of \scheme{dynamic-wind},
 since an error or long-running computation can leave interrupts

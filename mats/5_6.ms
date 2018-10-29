@@ -1,5 +1,5 @@
-;;; 5-5.ms
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; 5_6.ms
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -38,18 +38,34 @@
  )
 
 (mat $vector-ref-check?
-  (let ([v (make-vector 3)] [not-v (make-fxvector 3)])
+  (let ([v (make-vector 3)] [imm-v (vector->immutable-vector (make-vector 3))] [not-v (make-fxvector 3)])
     (let ([i-1 -1] [i0 0] [i1 1] [i2 2] [i3 3] [ifalse #f] [ibig (+ (most-positive-fixnum) 1)])
       (and
         (not (#%$vector-ref-check? not-v i0))
         (not (#%$vector-ref-check? v ifalse))
+        (not (#%$vector-ref-check? imm-v ifalse))
         (not (#%$vector-ref-check? v i-1))
+        (not (#%$vector-ref-check? imm-v i-1))
+        (#%$vector-ref-check? v 0)
+        (#%$vector-ref-check? v 1)
+        (#%$vector-ref-check? v 2) 
+        (#%$vector-ref-check? imm-v 0)
+        (#%$vector-ref-check? imm-v 1)
+        (#%$vector-ref-check? imm-v 2)
         (#%$vector-ref-check? v i0)
         (#%$vector-ref-check? v i1)
-        (#%$vector-ref-check? v i2)
+        (#%$vector-ref-check? v i2) 
+        (#%$vector-ref-check? imm-v i0)
+        (#%$vector-ref-check? imm-v i1)
+        (#%$vector-ref-check? imm-v i2)
+        (not (#%$vector-ref-check? v 3))
         (not (#%$vector-ref-check? v i3))
-        (not (#%$vector-ref-check? v ibig)))))
+        (not (#%$vector-ref-check? v ibig))
+        (not (#%$vector-ref-check? imm-v 3))
+        (not (#%$vector-ref-check? imm-v i3))
+        (not (#%$vector-ref-check? imm-v ibig)))))
  )
+
 
 (mat vector-ref
     (eqv? (vector-ref '#(a b c) 0) 'a)
@@ -191,17 +207,31 @@
  )
 
 (mat $fxvector-ref-check?
-  (let ([fv (make-fxvector 3)] [not-fv (make-vector 3)])
+  (let ([fv (make-fxvector 3)] [imm-fv (fxvector->immutable-fxvector (make-fxvector 3))] [not-fv (make-vector 3)])
     (let ([i-1 -1] [i0 0] [i1 1] [i2 2] [i3 3] [ifalse #f] [ibig (+ (most-positive-fixnum) 1)])
       (and
         (not (#%$fxvector-ref-check? not-fv i0))
         (not (#%$fxvector-ref-check? fv ifalse))
         (not (#%$fxvector-ref-check? fv i-1))
+        (not (#%$fxvector-ref-check? imm-fv i-1))
+        (#%$fxvector-ref-check? fv 0)
+        (#%$fxvector-ref-check? fv 1)
+        (#%$fxvector-ref-check? fv 2)
+        (#%$fxvector-ref-check? imm-fv 0)
+        (#%$fxvector-ref-check? imm-fv 1)
+        (#%$fxvector-ref-check? imm-fv 2)
         (#%$fxvector-ref-check? fv i0)
         (#%$fxvector-ref-check? fv i1)
         (#%$fxvector-ref-check? fv i2)
+        (#%$fxvector-ref-check? imm-fv i0)
+        (#%$fxvector-ref-check? imm-fv i1)
+        (#%$fxvector-ref-check? imm-fv i2)
+        (not (#%$fxvector-ref-check? fv 3))
         (not (#%$fxvector-ref-check? fv i3))
-        (not (#%$fxvector-ref-check? fv ibig)))))
+        (not (#%$fxvector-ref-check? fv ibig))
+        (not (#%$fxvector-ref-check? imm-fv 3))
+        (not (#%$fxvector-ref-check? imm-fv i3))
+        (not (#%$fxvector-ref-check? imm-fv ibig)))))
  )
 
 (mat fxvector-ref
@@ -1131,4 +1161,108 @@
                 (fprintf (console-output-port) "\n~s\n" ls)
                 (errorf #f "failed")))))))
     (make-string 200 #\.))
+)
+
+(mat vector->immutable-vector
+    (begin
+      (define immutable-123-vector
+        (vector->immutable-vector (vector 1 2 3)))
+      #t)
+    
+    (immutable-vector? immutable-123-vector)
+    (not (mutable-vector? immutable-123-vector))
+    
+    (equal? '#(1 2 3) immutable-123-vector)
+    (eq? immutable-123-vector
+         (vector->immutable-vector immutable-123-vector))
+    
+    (mutable-vector? (make-vector 5))
+    (not (immutable-vector? (make-vector 5)))
+    
+    (immutable-vector? (vector->immutable-vector (vector)))
+    (not (mutable-vector? (vector->immutable-vector (vector))))
+    (not (immutable-vector? (vector)))
+    (mutable-vector? (vector))
+    
+    (not (immutable-vector? (vector-copy immutable-123-vector)))
+
+    (error? (vector-set! immutable-123-vector 0 1))
+    (error? (vector-set-fixnum! immutable-123-vector 0 1))
+    (error? (vector-fill! immutable-123-vector 0))
+    (error? (vector-sort! < immutable-123-vector))
+)
+
+
+
+(mat fxvector->immutable-fxvector
+    (begin
+      (define immutable-123-fxvector
+        (fxvector->immutable-fxvector (fxvector 1 2 3)))
+      #t)
+    
+    (immutable-fxvector? immutable-123-fxvector)
+    (not (mutable-fxvector? immutable-123-fxvector))
+    
+    (equal? '#vfx(1 2 3) immutable-123-fxvector)
+    (eq? immutable-123-fxvector
+         (fxvector->immutable-fxvector immutable-123-fxvector))
+    
+    (mutable-fxvector? (make-fxvector 5))
+    (not (immutable-fxvector? (make-fxvector 5)))
+    
+    (immutable-fxvector? (fxvector->immutable-fxvector (fxvector)))
+    (not (mutable-fxvector? (fxvector->immutable-fxvector (fxvector))))
+    (not (immutable-fxvector? (fxvector)))
+    (mutable-fxvector? (fxvector))
+    
+    (not (immutable-fxvector? (fxvector-copy immutable-123-fxvector)))
+
+    (error? (fxvector-set! immutable-123-fxvector 0 1))
+    (error? (fxvector-fill! immutable-123-fxvector 0))
+)
+
+(mat vector-cas!
+  (begin
+    (define vec1 (vector 1 2 3))
+    (define vec2 (vector 'apple 'banana 'coconut))
+    (eq? 1 (vector-ref vec1 0)))
+  (not (vector-cas! vec1 0 0 1))
+  (eq? 1 (vector-ref vec1 0))
+  (vector-cas! vec1 0 1 4)
+  (eq? 4 (vector-ref vec1 0))
+  (not (vector-cas! vec1 0 1 5))
+
+  (not (vector-cas! vec1 1 0 1))
+  (eq? 2 (vector-ref vec1 1))
+  (vector-cas! vec1 1 2 5)
+  (eq? 5 (vector-ref vec1 1))
+
+  (not (vector-cas! vec2 0 'banana 'donut))
+  (vector-cas! vec2 0 'apple 'donut)
+  (not (vector-cas! vec2 0 'apple 'eclair))
+  (eq? 'donut (vector-ref vec2 0))
+
+  (not (vector-cas! vec2 1 'apple 'fig))
+  (vector-cas! vec2 1 'banana 'fig)
+  (not (vector-cas! vec2 1 'banana 'grape))
+  (eq? 'fig (vector-ref vec2 1))
+
+  (error? (vector-cas! vec1)) ; arity
+  (error? (vector-cas! vec1 1)) ; arity
+  (error? (vector-cas! vec1 1 2)) ; arity
+  (error? (vector-cas! 1 vec1 2 3)) ; not a vector
+  (error? (vector-cas! (vector->immutable-vector vec1) 1 2 3)) ; not a mutable vector
+  (error? (vector-cas! vec1 vec1 2 3)) ; not a fixnum
+  (error? (vector-cas! vec1 (expt 2 100) 2 3)) ; not a fixnum
+  (error? (vector-cas! vec1 -1 2 3)) ; out of range
+  (error? (vector-cas! vec1 5 2 3)) ; out of range
+
+  ;; make sure `vector-cas!` works with GC generations:
+  (begin
+    (collect 0)
+    (let ([g1 (gensym)])
+      (and (vector-cas! vec2 2 'coconut g1)
+           (begin
+             (collect 0)
+             (eq? g1 (vector-ref vec2 2))))))
 )

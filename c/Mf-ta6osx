@@ -1,5 +1,5 @@
 # Mf-ta6osx
-# Copyright 1984-2016 Cisco Systems, Inc.
+# Copyright 1984-2017 Cisco Systems, Inc.
 # 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@ m = ta6osx
 Cpu = X86_64
 
 mdclib = -liconv -lm -lncurses
-C = gcc ${CPPFLAGS} -m64 -Wpointer-arith -Wall -Wextra -Werror -O2 -I/opt/X11/include/ ${CFLAGS}
+C = ${CC} ${CPPFLAGS} -m64 -Wpointer-arith -Wall -Wextra -Wno-implicit-fallthrough -Werror -O2 -I/opt/X11/include/ ${CFLAGS}
 o = o
 mdsrc = i3le.c
 mdobj = i3le.o

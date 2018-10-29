@@ -1,6 +1,6 @@
 "fasl.ss"
 ;;; fasl.ss
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -204,26 +204,32 @@
 
 (define wrf-pair
   (lambda (x p t a?)
-    (if (weak-pair? x)
-        (begin
-          (put-u8 p (constant fasl-type-weak-pair))
-          (wrf (car x) p t a?)
-          (wrf (cdr x) p t a?))
-        (begin ; more like list*
-          (put-u8 p (constant fasl-type-pair))
-          (let ([n (let wrf-pair-loop0 ([n 1] [x (cdr x)])
-                     ; cut off at end or at shared structure
-                      (if (and (pair? x)
-                               (not (weak-pair? x))
-                               (not (eq-hashtable-ref (table-hash t) x #f)))
-                          (wrf-pair-loop0 (fx+ n 1) (cdr x))
-                          n))])
-             (put-uptr p n)
-             (let wrf-pair-loop1 ([x x] [n n])
-                (wrf (car x) p t a?)
-                (if (fx= n 1)
-                    (wrf (cdr x) p t a?)
-                    (wrf-pair-loop1 (cdr x) (fx- n 1)))))))))
+    (cond
+      [(weak-pair? x)
+       (put-u8 p (constant fasl-type-weak-pair))
+       (wrf (car x) p t a?)
+       (wrf (cdr x) p t a?)]
+      [(ephemeron-pair? x)
+       (put-u8 p (constant fasl-type-ephemeron))
+       (wrf (car x) p t a?)
+       (wrf (cdr x) p t a?)]
+      [else
+       ; more like list*
+       (put-u8 p (constant fasl-type-pair))
+       (let ([n (let wrf-pair-loop0 ([n 1] [x (cdr x)])
+                  ; cut off at end or at shared structure
+                  (if (and (pair? x)
+                           (not (weak-pair? x))
+                           (not (ephemeron-pair? x))
+                           (not (eq-hashtable-ref (table-hash t) x #f)))
+                      (wrf-pair-loop0 (fx+ n 1) (cdr x))
+                      n))])
+         (put-uptr p n)
+         (let wrf-pair-loop1 ([x x] [n n])
+           (wrf (car x) p t a?)
+           (if (fx= n 1)
+               (wrf (cdr x) p t a?)
+               (wrf-pair-loop1 (cdr x) (fx- n 1)))))])))
 
 (define wrf-symbol
   (lambda (x p t a?)
@@ -247,12 +253,16 @@
 
 (define wrf-string
    (lambda (x p t a?)
-      (put-u8 p (constant fasl-type-string))
+      (put-u8 p (if (immutable-string? x)
+                    (constant fasl-type-immutable-string)
+                    (constant fasl-type-string)))
       (wrf-string-help x p)))
 
 (define wrf-vector
    (lambda (x p t a?)
-      (put-u8 p (constant fasl-type-vector))
+      (put-u8 p (if (immutable-vector? x)
+                    (constant fasl-type-immutable-vector)
+                    (constant fasl-type-vector)))
       (let ([n (vector-length x)]) 
          (put-uptr p n)
          (let wrf-vector-loop ([i 0])
@@ -262,7 +272,9 @@
 
 (define wrf-fxvector
   (lambda (x p t a?)
-    (put-u8 p (constant fasl-type-fxvector))
+    (put-u8 p (if (immutable-fxvector? x)
+                  (constant fasl-type-immutable-fxvector)
+                  (constant fasl-type-fxvector)))
     (let ([n (fxvector-length x)])
       (put-uptr p n)
       (let wrf-fxvector-loop ([i 0])
@@ -272,7 +284,9 @@
 
 (define wrf-bytevector
   (lambda (x p t a?)
-    (put-u8 p (constant fasl-type-bytevector))
+    (put-u8 p (if (immutable-bytevector? x)
+                  (constant fasl-type-immutable-bytevector)
+                  (constant fasl-type-bytevector)))
     (let ([n (bytevector-length x)])
       (put-uptr p n)
       (let wrf-bytevector-loop ([i 0])
@@ -418,7 +432,10 @@
   (lambda (x p t a?)
     (put-u8 p (constant fasl-type-eq-hashtable))
     (put-u8 p (if (hashtable-mutable? x) 1 0))
-    (put-u8 p (if (eq-hashtable-weak? x) 1 0))
+    (put-u8 p (cond
+               [(eq-hashtable-weak? x) (constant eq-hashtable-subtype-weak)]
+               [(eq-hashtable-ephemeron? x) (constant eq-hashtable-subtype-ephemeron)]
+               [else  (constant eq-hashtable-subtype-normal)]))
     (put-uptr p ($ht-minlen x))
     (put-uptr p ($ht-veclen x))
     (let-values ([(keyvec valvec) (hashtable-entries x)])
@@ -457,7 +474,9 @@
 
 (define wrf-box
    (lambda (x p t a?)
-      (put-u8 p (constant fasl-type-box))
+      (put-u8 p (if (immutable-box? x)
+                    (constant fasl-type-immutable-box)
+                    (constant fasl-type-box)))
       (wrf (unbox x) p t a?)))
 
 (define wrf-ratnum

@@ -1,5 +1,5 @@
 "ftype.ss"
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -56,7 +56,7 @@ ftype ->
   (array length ftype)
   (bits (field-name signedness bits) ...)
   (function (arg-type ...) result-type)
-  (function conv (arg-type ...) result-type)
+  (function conv ... (arg-type ...) result-type)
   (packed ftype)
   (unpacked ftype)
   (endian endianness ftype)
@@ -172,7 +172,7 @@ ftype operators:
    returns #t if the address encapsulated within fptr is 0,
    otherwise #f.
 
-(ftype-pointer-null? fptr1 fptr2) [procedure]
+(ftype-pointer=? fptr1 fptr2) [procedure]
 
    returns #t if the addresses encapsulated within fptr are
    the same, otherwise #f.
@@ -322,7 +322,7 @@ ftype operators:
   (define-ftd-record-type array #{rtd/ftd-array a9pth58056u34h517jsrqv-5} length ftd)
   (define-ftd-record-type pointer #{rtd/ftd-pointer a9pth58056u34h517jsrqv-6} (mutable ftd))
   (define-ftd-record-type bits #{rtd/ftd-ibits a9pth58056u34h517jsrqv-9} swap? field*)
-  (define-ftd-record-type function #{rtd/ftd-function a9pth58056u34h517jsrqv-10} conv arg-type* result-type)
+  (define-ftd-record-type function #{rtd/ftd-function a9pth58056u34h517jsrqv-11} conv* arg-type* result-type)
   (module (pointer-size alignment pointer-alignment native-base-ftds swap-base-ftds)
     (define alignment
       (lambda (max-alignment size)
@@ -527,7 +527,7 @@ ftype operators:
                    [(function-kwd (arg-type ...) result-type)
                     (eq? (datum function-kwd) 'function)
                     (f #'(function-kwd #f (arg-type ...) result-type) #f stype funok?)]
-                   [(function-kwd conv (arg-type ...) result-type)
+                   [(function-kwd conv ... (arg-type ...) result-type)
                     (eq? (datum function-kwd) 'function)
                     (let ()
                       (define filter-type
@@ -539,7 +539,7 @@ ftype operators:
                       (make-ftd-function rtd/fptr
                         (and defid (symbol->string (syntax->datum defid)))
                         stype #f #f
-                        ($filter-conv 'function-ftype #'conv)
+                        ($filter-conv 'function-ftype #'(conv ...))
                         (map (lambda (x) (filter-type r x #f)) #'(arg-type ...))
                         (filter-type r #'result-type #t)))]
                    [(packed-kwd ftype)
@@ -560,21 +560,32 @@ ftype operators:
   (define expand-fp-ftype
     (lambda (who what r ftype def-alist)
       (syntax-case ftype ()
-        [(*-kwd ftype-name)
-         (and (eq? (datum *-kwd) '*) (identifier? #'ftype-name))
-         (let ([stype (syntax->datum ftype)])
-           (cond
-             [(assp (lambda (x) (bound-identifier=? #'ftype-name x)) def-alist) =>
-              (lambda (a)
-                (if (ftd? (cdr a))
-                    (make-ftd-pointer rtd/fptr #f stype pointer-size pointer-alignment (cdr a))
-                    (let ([ftd (make-ftd-pointer rtd/fptr #f stype pointer-size pointer-alignment #f)])
-                      (set-cdr! a (cons ftd (cdr a)))
-                      ftd)))]
-             [(expand-ftype-name r #'ftype-name #f) =>
-              (lambda (ftd)
-                (make-ftd-pointer rtd/fptr #f stype pointer-size pointer-alignment ftd))]
-             [else (syntax-error #'ftype-name (format "unrecognized ~s ~s ftype name" who what))]))]
+        [(*/&-kwd ftype-name)
+         (and (or (eq? (datum */&-kwd) '*)
+                  (eq? (datum */&-kwd) '&))
+              (identifier? #'ftype-name))
+         (let* ([stype (syntax->datum ftype)]
+                [ftd
+                 (cond
+                  [(assp (lambda (x) (bound-identifier=? #'ftype-name x)) def-alist) =>
+                   (lambda (a)
+                     (if (ftd? (cdr a))
+                         (make-ftd-pointer rtd/fptr #f stype pointer-size pointer-alignment (cdr a))
+                         (let ([ftd (make-ftd-pointer rtd/fptr #f stype pointer-size pointer-alignment #f)])
+                           (set-cdr! a (cons ftd (cdr a)))
+                           ftd)))]
+                  [(expand-ftype-name r #'ftype-name #f) =>
+                   (lambda (ftd)
+                     (make-ftd-pointer rtd/fptr #f stype pointer-size pointer-alignment ftd))]
+                  [else (syntax-error #'ftype-name (format "unrecognized ~s ~s ftype name" who what))])])
+           ;; Scheme-side argument is a pointer to a value, but foreign side has two variants:
+           (if (eq? (datum */&-kwd) '&)
+               (cond
+                [(ftd-array? (ftd-pointer-ftd ftd))
+                 (syntax-error ftype (format "array value invalid as ~a ~s" who what))]
+                [else
+                 (box ftd)]) ; boxed ftd => pass/receive the value (as opposed to a pointer to the value)
+               ftd))]    ; plain ftd => pass/receive a pointer to the value
         [_ (cond
              [(and (identifier? ftype) (expand-ftype-name r ftype #f)) =>
               (lambda (ftd)
@@ -586,11 +597,14 @@ ftype operators:
              [else (syntax->datum ftype)])])))
   (define-who indirect-ftd-pointer
     (lambda (x)
-      (if (ftd? x)
-          (if (ftd-pointer? x)
-              (ftd-pointer-ftd x)
-              ($oops who "~s is not an ftd-pointer" x))
-          x)))
+      (cond
+       [(ftd? x)
+        (if (ftd-pointer? x)
+            (ftd-pointer-ftd x)
+            ($oops who "~s is not an ftd-pointer" x))]
+       [(box? x)
+        (box (indirect-ftd-pointer (unbox x)))]
+       [else x])))
   (define-who expand-ftype-defns
     (lambda (r defid* ftype*)
       (define patch-pointer-ftds!
@@ -715,7 +729,7 @@ ftype operators:
                                       ;; (foreign-callable-entry-point code-object)
                                       [(procedure? x)
                                        (let ([co #,($make-foreign-callable 'make-ftype-pointer
-                                                     (ftd-function-conv ftd)
+                                                     (ftd-function-conv* ftd)
                                                      #'x
                                                      (map indirect-ftd-pointer (ftd-function-arg-type* ftd))
                                                      (indirect-ftd-pointer (ftd-function-result-type ftd)))])
@@ -728,7 +742,10 @@ ftype operators:
                                       [else x]))
                                 #'?addr)])
                #`($make-fptr '#,ftd
-                   #,(if (fx= (optimize-level) 3)
+                   #,(if (or (fx= (optimize-level) 3)
+                             (syntax-case #'addr-expr (ftype-pointer-address)
+                               [(ftype-pointer-address x) #t]
+                               [else #f]))
                          #'addr-expr
                          #'(let ([addr addr-expr])
                              ($verify-ftype-address 'make-ftype addr)
@@ -926,6 +943,74 @@ ftype operators:
   (set! $ftd?
     (lambda (x)
       (ftd? x)))
+  (set! $ftd-as-box? ; represents `(& <ftype>)` from `$expand-fp-ftype`
+    (lambda (x)
+      (and (box? x) (ftd? (unbox x)))))
+  (set! $ftd-size
+    (lambda (x)
+      (ftd-size x)))
+  (set! $ftd-alignment
+    (lambda (x)
+      (ftd-alignment x)))
+  (set! $ftd-compound?
+    (lambda (x)
+      (or (ftd-struct? x)
+          (ftd-union? x)
+          (ftd-array? x))))
+  (set! $ftd->members
+    (lambda (x)
+      ;; Currently used for x86_64 and arm32 ABI: Returns a list of
+      ;;  (list 'integer/'float size offset)
+      (let loop ([x x] [offset 0] [accum '()])
+        (cond
+         [(ftd-base? x)
+          (cons (list (case (ftd-base-type x)
+                        [(double double-float float single-float)
+                         'float]
+                        [else 'integer])
+                      (ftd-size x)
+                      offset)
+                accum)]
+         [(ftd-struct? x)
+          (let struct-loop ([field* (ftd-struct-field* x)] [accum accum])
+            (cond
+             [(null? field*) accum]
+             [else (let* ([fld (car field*)]
+                          [sub-ftd (caddr fld)]
+                          [sub-offset (cadr fld)])
+                     (struct-loop (cdr field*)
+                                  (loop sub-ftd (+ offset sub-offset) accum)))]))]
+         [(ftd-union? x)
+          (let union-loop ([field* (ftd-union-field* x)] [accum accum])
+            (cond
+             [(null? field*) accum]
+             [else (let* ([fld (car field*)]
+                          [sub-ftd (cdr fld)])
+                     (union-loop (cdr field*)
+                                 (loop sub-ftd offset accum)))]))]
+         [(ftd-array? x)
+          (let ([elem-ftd (ftd-array-ftd x)])
+            (let array-loop ([len (ftd-array-length x)] [offset offset] [accum accum])
+              (cond
+               [(fx= len 0) accum]
+               [else (array-loop (fx- len 1)
+                                 (+ offset (ftd-size elem-ftd))
+                                 (loop elem-ftd offset accum))])))]
+         [else (cons (list 'integer (ftd-size x) offset) accum)]))))
+  (set! $ftd-atomic-category
+    (lambda (x)
+      ;; Currently used for PowerPC32 ABI
+      (cond
+       [(ftd-base? x)
+	(case (ftd-base-type x)
+	  [(double double-float float single-float)
+	   'float]
+	  [(unsigned-short unsigned unsigned-int
+			   unsigned-long unsigned-long-long
+			   unsigned-8 unsigned-16 unsigned-32 unsigned-64)
+	   'unsigned]
+	  [else 'integer])]
+       [else 'integer])))
   (set! $expand-fp-ftype ; for foreign-procedure, foreign-callable
     (lambda (who what r ftype)
       (indirect-ftd-pointer
@@ -1112,8 +1197,8 @@ ftype operators:
                                       [(ftd-base? ftd) (do-base (filter-foreign-type (ftd-base-type ftd)) (ftd-base-swap? ftd) offset)]
                                       [(ftd-pointer? ftd) #`(#3%$fptr-fptr-ref #,fptr-expr #,offset '#,(ftd-pointer-ftd ftd))]
                                       [(ftd-function? ftd) 
-                                       ($make-foreign-procedure
-                                         (ftd-function-conv ftd)
+                                       ($make-foreign-procedure 'make-ftype-pointer
+                                         (ftd-function-conv* ftd)
                                          #f
                                          #`($fptr-offset-addr #,fptr-expr offset)
                                          (map indirect-ftd-pointer (ftd-function-arg-type* ftd))

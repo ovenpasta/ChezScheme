@@ -1,4 +1,4 @@
-% Copyright 2005-2016 Cisco Systems, Inc.
+% Copyright 2005-2017 Cisco Systems, Inc.
 % 
 % Licensed under the Apache License, Version 2.0 (the "License");
 % you may not use this file except in compliance with the License.
@@ -13,15 +13,12 @@
 % limitations under the License.
 \chapter{Introduction}
 
-{\ChezScheme} is an implementation of the Revised$^6$ Report on
-Scheme~\cite{r6rs} (R6RS) with numerous language and programming environment
-extensions.
-
-This book describes these extensions in detail.
+This book describes {\ChezScheme} extensions to the Revised$^6$
+Report on Scheme~\cite{r6rs} (R6RS).
 It contains as well a concise summary of standard and {\ChezScheme} forms 
 and procedures, which gives the syntax of each form and the number and
 types of arguments accepted by each procedure.
-Details on standard Scheme features can be found in
+Details on standard R6RS features can be found in
 \index{The Scheme Programming Language, 4th Edition@\emph{The Scheme Programming Language, 4th Edition}}\hyperlink{http://www.scheme.com/tspl4/}{\emph{The
 Scheme Programming Language, 4th Edition}} (TSPL4)~\cite{Dybvig:tspl4} or
 the Revised$^6$ Report on Scheme.
@@ -96,7 +93,7 @@ Online versions and errata for this book and for TSPL4 can be found at
 \bigskip\noindent
 \emph{Acknowledgments:}
 Michael Adams, Mike Ashley, Carl Bruggeman, Bob Burger, Sam
-Daniel, George Davidson, Aziz Ghuloum, Bob Hieb, Andy Keep, and Oscar Waddell have
+Daniel, George Davidson, Matthew Flatt, Aziz Ghuloum, Bob Hieb, Andy Keep, and Oscar Waddell have
 contributed substantially to the development of {\ChezScheme}.
 {\ChezScheme}'s expression editor is based on a command-line editor for
 Scheme developed from 1989 through 1994 by C.~David Boyer.
@@ -134,7 +131,7 @@ valid identifiers in {\ChezScheme}.
 Second, the single-character sequences \scheme{\schlbrace} and
 \scheme{\schrbrace} are identifiers.
 Third, identifiers containing arbitrary characters may be printed by
-escaping them them with \scheme{\} or with \scheme{|}.
+escaping them with \scheme{\} or with \scheme{|}.
 \scheme{\} is used to escape a single character (except 'x', since
 \scheme{\x} marks the start of a hex scalar value),
 whereas \scheme{|} is used
@@ -142,7 +139,7 @@ to escape the group of characters that follow it up through the
 matching \scheme{|}.
 For example, \scheme{\||\|} is an identifier with a two-character
 name consisting of the character \scheme{|} followed by the
-the character \scheme{\}, and \scheme{|hit me!|} is an identifier whose name
+character \scheme{\}, and \scheme{|hit me!|} is an identifier whose name
 contains a space.
 
 In addition, gensyms (page~\ref{desc:gensym}) are printed with
@@ -269,10 +266,13 @@ parameter \scheme{case-sensitive} has been set to \scheme{#f}.
 The printer invoked by \scheme{write}, \scheme{put-datum},
 \scheme{pretty-print}, and the \scheme{format} \scheme{~s}
 option always prints standard Revised$^6$ Report objects
-using the standard syntax.
-For example, it prints symbols whose names require escaping using hex
-scalar value escapes, not one of the other mechanisms supported by the
-reader.
+using the standard syntax, unless a different behavior is
+requested via the setting of one of the print parameters.
+For example, it prints symbols in the extended identifier syntax
+of Chez Scheme described above using hex scalar value escapes,
+unless the parameter
+\index{\scheme{print-extended-identifiers}}\scheme{print-extended-identifiers} is set to
+true.
 Similarly, it does not print the explicit length or suppress
 duplicate trailing elements unless the parameter
 \index{\scheme{print-vector-length}}\scheme{print-vector-length} is set to

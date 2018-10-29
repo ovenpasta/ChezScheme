@@ -1,5 +1,5 @@
 /* system.h
- * Copyright 1984-2016 Cisco Systems, Inc.
+ * Copyright 1984-2017 Cisco Systems, Inc.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,12 +17,13 @@
 #include "scheme.h"
 #include "equates.h"
 #ifdef FEATURE_WINDOWS
-
 #ifdef __MINGW32__
-#define WINVER 0x0501 // Windows XP
-#define _WIN32_WINNT WINVER  /// FOR MUTEX STUFF in synchapi.h
+# define WINVER 0x0501 // Windows XP
+# define _WIN32_WINNT WINVER  /// FOR MUTEX STUFF in synchapi.h
+#else
+# define WINVER 0x0601 // Windows 7
+# define _WIN32_WINNT WINVER
 #endif
-
 #include <windows.h>
 #endif
 

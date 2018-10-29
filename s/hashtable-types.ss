@@ -1,5 +1,5 @@
 ;;; hashtable-types.ss
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -24,8 +24,8 @@
 
 (define-record-type eq-ht
   (parent ht)
-  (fields (immutable weak?))
-  (nongenerative #{eq-ht bu811z2onf9o6tfc-5})
+  (fields (immutable subtype)) ; eq-hashtable-subtype-{normal,weak,ephemeron}
+  (nongenerative #{eq-ht icguu8mlhm1y7ywsairxck-0})
   (sealed #t))
 
 (define-record-type symbol-ht

@@ -1,5 +1,5 @@
 /* schsig.c
- * Copyright 1984-2016 Cisco Systems, Inc.
+ * Copyright 1984-2017 Cisco Systems, Inc.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -314,7 +314,7 @@ void S_error_abort(s) const char *s; {
 
 void S_abnormal_exit() {
   S_abnormal_exit_proc();
-  fprintf(stderr, "abnormal_exit proedure did not exit\n");
+  fprintf(stderr, "abnormal_exit procedure did not exit\n");
   exit(1);
 }
 
@@ -373,7 +373,7 @@ void S_boot_error(ptr who, ptr msg, ptr args) {
 static void do_error(type, who, s, args) iptr type; const char *who, *s; ptr args; {
     ptr tc = get_thread_context();
 
-    if (S_errors_to_console || CCHAIN(tc) == Snil) {
+    if (S_errors_to_console || tc == (ptr)0 || CCHAIN(tc) == Snil) {
         if (strlen(who) == 0)
           printf("Error: %s\n", s);
         else
@@ -384,8 +384,8 @@ static void do_error(type, who, s, args) iptr type; const char *who, *s; ptr arg
     }
 
     args = Scons(FIX(type),
-                 Scons((strlen(who) == 0 ? Sfalse : S_string(who,-1)),
-                       Scons(S_string(s, -1), args)));
+                 Scons((strlen(who) == 0 ? Sfalse : Sstring_utf8(who,-1)),
+                       Scons(Sstring_utf8(s, -1), args)));
 
 #ifdef PTHREADS
     while (S_tc_mutex_depth > 0) {
@@ -673,12 +673,10 @@ void S_schsig_init() {
         p = S_code(get_thread_context(), type_code | (code_flag_continuation << code_flags_offset), 0);
         CODERELOC(p) = S_relocation_table(0);
         CODENAME(p) = Sfalse;
+        CODEARITYMASK(p) = FIX(0);
         CODEFREE(p) = 0;
         CODEINFO(p) = Sfalse;
         CODEPINFOS(p) = Snil;
-
-        S_protect(&S_G.dummy_continuation_code);
-        S_G.dummy_continuation_code = p;
 
         S_set_symbol_value(S_G.null_continuation_id,
             S_mkcontinuation(space_new,

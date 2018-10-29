@@ -1,6 +1,5 @@
-;; examples .ms
 ;;; examples.ms
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -21,7 +20,7 @@
      (begin
        (mat name
          (begin
-           (parameterize ((current-directory *examples-directory*))
+           (parameterize ((source-directories (cons *examples-directory* (source-directories))))
              (load (format "~a/~a.ss" *examples-directory* file))
              ...)
            #t)
@@ -584,4 +583,10 @@ edit>
     (equal? '(x y z) (test-6 x y z)))
 
   (begin (define-struct! caramel x y z) (eqv? (caramel-x (caramel 1 2 3)) 1))
+)
+
+(examples-mat ez-grammar-test ("ez-grammar-test")
+  (equal?
+    (with-output-to-string ez-grammar-test)
+    "8 tests ran\n")
 )

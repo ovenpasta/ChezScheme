@@ -1,5 +1,5 @@
 "record.ss"
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -51,10 +51,7 @@
         (lambda (n)
           (unless (and (fixnum? n) (fx> n 0))
             ($oops who "~s is not a positive fixnum" n))
-          (let ([x (malloc n)])
-            (if (string? x)
-                ($oops who "system call failed: ~(~a~)" x)
-                x)))))
+          (malloc n))))
 
     (set-who! foreign-free
       (let ([free (foreign-procedure "(cs)free" (uptr) void)])
@@ -454,7 +451,7 @@
             [else
              (let ([rtd (apply #%$record base-rtd parent size pm mpm name
                           (cdr flds) flags uid #f extras)])
-               ($sputprop uid '*rtd* rtd)
+               (with-tc-mutex ($sputprop uid '*rtd* rtd))
                rtd)]))))
 
     (set-who! $remake-rtd
@@ -479,7 +476,7 @@
                                        '()
                                        (cons ((csv7:record-field-accessor base-rtd n) rtd)
                                          (f (fx+ n 1) (cdr ls)))))))])
-                    ($sputprop uid key rtd)
+                    (with-tc-mutex ($sputprop uid key rtd))
                     rtd)))))))
 
     (let ()

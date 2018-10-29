@@ -1,5 +1,5 @@
 ;;; 4.ms
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -336,7 +336,7 @@
   (equivalent-expansion? 
      (parameterize ([optimize-level 2] [enable-cp0 #t] [#%$suppress-primitive-inlining #f])
        (expand/optimize '(if (begin (set! x y) (if (begin (set! z y) (zero? h)) (begin (set! l z) #f) (begin (set! l y) #t))) e1 e2)))
-     '(begin (set! x y) (if (begin (set! z y) (#2%zero? h)) (begin (set! l y) e2) (begin (set! l z) e1))))
+     '(begin (set! x y) (if (begin (set! z y) (#2%zero? h)) (begin (set! l z) e2) (begin (set! l y) e1))))
 
  )
 
@@ -370,6 +370,8 @@
  )
 
 (mat cond
+  (error? ; invalid syntax
+    (cond))
    (let ((a 'a))
       (and (begin (set! a 3)
                   (cond ((= a 4) #f) ((= a 3) #t) (else #f)))
@@ -393,6 +395,10 @@
  )
 
 (mat exclusive-cond
+   (error? ; invalid syntax
+     (exclusive-cond [a . b]))
+   (error? ; invalid syntax
+     (exclusive-cond))
    (let ((a 'a))
       (and (begin (set! a 3)
                   (exclusive-cond ((= a 4) #f) ((= a 3) #t) (else #f)))
@@ -464,163 +470,285 @@
  )
 
 (mat case
-   (eq? (case 'a [a 'yes] [b 'no]) 'yes)
-   (let ((a 'a))
-      (and
-        (begin (set! a 'a)
-               (case a (a #t) ((b c) #f))
-               (case a (a #t) ((b c) #f) (else #f)))
-        (begin (set! a 'b)
-               (case a (a #f) ((b c) #t))
-               (case a (a #f) ((b c) #t) (else #f)))
-        (begin (set! a 'c)
-               (case a (a #f) ((b c) #t))
-               (case a (a #f) ((b c) #t) (else #f)))
-        (begin (set! a 'd)
-               (case a (a #f) ((b c) #f) (else #t)))))
-    (let ([f (lambda (x)
-                (case x
-                   (#\a 'case1)
-                   (1/2 'case2)
-                   (999999999999999 'case3)
-                   (3.4 'case4)
-                   (else 'oops)))])
-       (and (eq? (f (string-ref "abc" 0)) 'case1)
-            (eq? (f (exact 0.5)) 'case2)
-            (eq? (f (- 1000000000000000 1)) 'case3)
-            (eq? (f (+ 3.0 4/10)) 'case4)
-            (eq? (f 'b) 'oops)))
-    (case '() [() #f] [else #t])
-    (case '() [(()) #t] [else #f])
-    (case "meow" ["meow" #t] [else #f])
-    (case '(1 2 3) [((1 2 3) (3 2 1)) #t] [else #f])
-    (case 'a [1 6] ["meow" #f] [(a b c) #t])
-    (case #\: [1 6] ["meow" #f] [(a b c) #f] [(#\; #\9 #\: #\4) #t])
-    (case (/ 12.0 3.0) [(4 5 6) #f] [("bla") #f] [(a b c) #f] [(1 5.8 4.9 4.0) #t] [else #f])
-   (begin
-     (with-output-to-file "testfile.ss"
-       (lambda ()
-         (pretty-print
-           '(define foo
-              (lambda (x)
-                (case x
-                  [("three" 4) 'B]
-                  [("three" 5) 'A]
-                  [else #f]))))
-         (pretty-print
-           '(begin
-              (do ([i 10 (fx- i 1)]) ((fx= i 0)) (write (foo 5)))
-              (write (foo "three")))))
-       'replace)
-     (profile-clear-database)
-     #t)
-   ; verify no reordering w/no profile information
-   (let ([x (let* ([ip (open-file-input-port "testfile.ss")]
-                   [sfd (make-source-file-descriptor "testfile.ss" ip #t)]
-                   [ip (transcoded-port ip (native-transcoder))])
-              (let-values ([(x efp) (get-datum/annotations ip sfd 0)])
-                (close-port ip)
-                (parameterize ([optimize-level 2] [enable-cp0 #f] [#%$suppress-primitive-inlining #f]) (expand/optimize x))))])
-     ; redundant keys might or might not be pruned, so allow it both ways
-     (or (equivalent-expansion?
-           x
-           '(begin
-              (set! foo
-                (lambda (x)
-                  (let ([t x])
-                    (if (#2%member t '("three" 4))
-                        'B
-                        (if (#2%member t '("three" 5))
-                            'A
-                            #f)))))
-              (#2%void)))
-         (equivalent-expansion?
-           x
-           '(begin
-              (set! foo
-                (lambda (x)
-                  (let ([t x])
-                    (if (#2%member t '("three" 4))
-                        'B
-                        (if (#2%member t '(5))
-                            'A
-                            #f)))))
-              (#2%void)))))
-   (equal?
-     (with-output-to-string
-       (lambda ()
-         (parameterize ([compile-profile #t]) (load "testfile.ss" compile))))
-     "AAAAAAAAAAB")
-   (begin
-     (profile-dump-data "testfile.pd")
-     (profile-load-data "testfile.pd")
-     #t)
-   (equal?
-     (with-output-to-string
-       (lambda ()
-         (load "testfile.ss" compile)))
-     "AAAAAAAAAAB")
-   ; verify reordering based on profile information
-   (equivalent-expansion?
-     (let* ([ip (open-file-input-port "testfile.ss")]
-            [sfd (make-source-file-descriptor "testfile.ss" ip #t)]
-            [ip (transcoded-port ip (native-transcoder))])
-       (let-values ([(x efp) (get-datum/annotations ip sfd 0)])
-         (close-port ip)
-         (parameterize ([optimize-level 2] [enable-cp0 #f] [#%$suppress-primitive-inlining #f]) (expand/optimize x))))
-     '(begin
-        (set! foo
-          (lambda (x)
-            (let ([t x])
-              (if (#2%member t '(5))
-                  'A
-                  (if (#2%member t '("three" 4))
-                      'B
-                      #f)))))
-        (#2%void)))
-   (begin
-     (profile-clear-database)
-     #t)
+  (error? ; invalid syntax
+    (case 3 [a . b]))
+  (eq? (case 'a [a 'yes] [b 'no]) 'yes)
+  (let ((a 'a))
+    (and
+      (begin (set! a 'a)
+        (case a (a #t) ((b c) #f))
+        (case a (a #t) ((b c) #f) (else #f)))
+      (begin (set! a 'b)
+        (case a (a #f) ((b c) #t))
+        (case a (a #f) ((b c) #t) (else #f)))
+      (begin (set! a 'c)
+        (case a (a #f) ((b c) #t))
+        (case a (a #f) ((b c) #t) (else #f)))
+      (begin (set! a 'd)
+        (case a (a #f) ((b c) #f) (else #t)))))
+  (let ([f (lambda (x)
+             (case x
+               (#\a 'case1)
+               (1/2 'case2)
+               (999999999999999 'case3)
+               (3.4 'case4)
+               (else 'oops)))])
+    (and (eq? (f (string-ref "abc" 0)) 'case1)
+         (eq? (f (exact 0.5)) 'case2)
+         (eq? (f (- 1000000000000000 1)) 'case3)
+         (eq? (f (+ 3.0 4/10)) 'case4)
+         (eq? (f 'b) 'oops)))
+  (case '() [() #f] [else #t])
+  (case '() [(()) #t] [else #f])
+  (case "meow" ["meow" #t] [else #f])
+  (case '(1 2 3) [((1 2 3) (3 2 1)) #t] [else #f])
+  (case 'a [1 6] ["meow" #f] [(a b c) #t])
+  (case #\: [1 6] ["meow" #f] [(a b c) #f] [(#\; #\9 #\: #\4) #t])
+  (case (/ 12.0 3.0) [(4 5 6) #f] [("bla") #f] [(a b c) #f] [(1 5.8 4.9 4.0) #t] [else #f])
+  (begin
+    (with-output-to-file "testfile.ss"
+      (lambda ()
+        (pretty-print
+          '(define foo
+             (lambda (x)
+               (case x
+                 [("three" 4) 'B]
+                 [("three" 5) 'A]
+                 [else #f]))))
+        (pretty-print
+          '(begin
+             (do ([i 10 (fx- i 1)]) ((fx= i 0)) (write (foo 5)))
+             (write (foo "three")))))
+      'replace)
+    (profile-clear-database)
+    #t)
+  ; verify no reordering w/no profile information
+  (let ([x (let* ([ip (open-file-input-port "testfile.ss")]
+                  [sfd (make-source-file-descriptor "testfile.ss" ip #t)]
+                  [ip (transcoded-port ip (native-transcoder))])
+             (let-values ([(x efp) (get-datum/annotations ip sfd 0)])
+               (close-port ip)
+               (parameterize ([optimize-level 2] [enable-cp0 #f] [#%$suppress-primitive-inlining #f]) (expand/optimize x))))])
+    ; redundant keys might or might not be pruned, so allow it both ways
+    (or (equivalent-expansion?
+          x
+          '(begin
+             (set! foo
+               (lambda (x)
+                 (let ([t x])
+                   (if (#2%member t '("three" 4))
+                       'B
+                       (if (#2%member t '("three" 5))
+                           'A
+                           #f)))))
+             (#2%void)))
+        (equivalent-expansion?
+          x
+          '(begin
+             (set! foo
+               (lambda (x)
+                 (let ([t x])
+                   (if (#2%member t '("three" 4))
+                       'B
+                       (if (#2%member t '(5))
+                           'A
+                           #f)))))
+             (#2%void)))))
+  (equal?
+    (with-output-to-string
+      (lambda ()
+        (parameterize ([compile-profile #t]) (load "testfile.ss" compile))))
+    "AAAAAAAAAAB")
+  (begin
+    (profile-dump-data "testfile.pd")
+    (profile-load-data "testfile.pd")
+    #t)
+  (equal?
+    (with-output-to-string
+      (lambda ()
+        (load "testfile.ss" compile)))
+    "AAAAAAAAAAB")
+  ; verify reordering based on profile information
+  (equivalent-expansion?
+    (let* ([ip (open-file-input-port "testfile.ss")]
+           [sfd (make-source-file-descriptor "testfile.ss" ip #t)]
+           [ip (transcoded-port ip (native-transcoder))])
+      (let-values ([(x efp) (get-datum/annotations ip sfd 0)])
+        (close-port ip)
+        (parameterize ([optimize-level 2] [enable-cp0 #f] [#%$suppress-primitive-inlining #f]) (expand/optimize x))))
+    '(begin
+       (set! foo
+         (lambda (x)
+           (let ([t x])
+             (if (#2%member t '(5))
+                 'A
+                 (if (#2%member t '("three" 4))
+                     'B
+                     #f)))))
+       (#2%void)))
+  (begin
+    (profile-clear-database)
+    #t)
+  (equivalent-expansion?
+    (parameterize ([optimize-level 2] [enable-cp0 #f] [#%$suppress-primitive-inlining #f])
+      (expand/optimize '(lambda (x) (case x [(a b a 7) 'one] [(c a 7 9) 'two] [else 'three]))))
+    '(lambda (x)
+       (let ([t x])
+         (if (#2%member t '(a b 7))
+             'one
+             (if (#2%member t '(c 9))
+                 'two
+                 'three)))))
+  ; ensure we don't miss syntax errors through case discarding unreachable clause bodies
+  (error? ; invalid syntax (if)
+    (lambda (x)
+      (case x
+        [(a) 'one]
+        [(b c) 'two]
+        [(a b c) (if)]
+        [else #f])))
+  ; ensure expansion into cond doesn't cause => to "work" for case
+  (error? ; invalid syntax =>
+    (lambda (x)
+      (case x
+        [(a b c) => values])))
+  (error? ; invalid syntax =>
+    (lambda (x)
+      (case x
+        [(a b c) #f]
+        [(d e f) => values])))
+  (error? ; invalid syntax =>
+    (lambda (x)
+      (case x
+        [(a b c) #f]
+        [(a b c) => values])))
+  (error? ; invalid syntax =>
+    (lambda (x)
+      (case x
+        [(a b c) => values]
+        [else #f])))
+  (error? ; invalid syntax =>
+    (lambda (x)
+      (case x
+        [(a b c) #f]
+        [(d e f) => values]
+        [else #f])))
+  (error? ; invalid syntax =>
+    (lambda (x)
+      (case x
+        [(a b c) #f]
+        [(a b c) => values]
+        [else #f])))
+  (error? ; invalid syntax (case)
+    (case))
 )
 
-
 (mat r6rs:case
-   (error? ; invalid syntax
-     (r6rs:case 'a [a 'yes] [b 'no]))
-   (error? ; invalid syntax
-     (let ()
-       (import (only (rnrs) case))
-       (case 'a [a 'yes] [b 'no])))
-   (let ((a 'a))
+  (error? ; invalid syntax
+    (let ()
       (import (only (rnrs) case))
-      (and
-        (begin (set! a 'a)
-               (case a ((a) #t) ((b c) #f))
-               (case a ((a) #t) ((b c) #f) (else #f)))
-        (begin (set! a 'b)
-               (case a ((a) #f) ((b c) #t))
-               (case a ((a) #f) ((b c) #t) (else #f)))
-        (begin (set! a 'c)
-               (case a ((a) #f) ((b c) #t))
-               (case a ((a) #f) ((b c) #t) (else #f)))
-        (begin (set! a 'd)
-               (case a ((a) #f) ((b c) #f) (else #t)))))
-    (let ([f (lambda (x)
-                (import (only (rnrs) case))
-                (case x
-                   ((#\a) 'case1)
-                   ((1/2) 'case2)
-                   ((999999999999999) 'case3)
-                   ((3.4) 'case4)
-                   (else 'oops)))])
-       (and (eq? (f (string-ref "abc" 0)) 'case1)
-            (eq? (f (exact 0.5)) 'case2)
-            (eq? (f (- 1000000000000000 1)) 'case3)
-            (eq? (f (+ 3.0 4/10)) 'case4)
-            (eq? (f 'b) 'oops)))
-    (case '() [() #f] [else #t])
-    (case '() [(()) #t] [else #f])
- )
+      (case 'a [a 'yes] [b 'no])))
+  (error? ; invalid syntax
+    (let ()
+      (import (only (rnrs) case))
+      (case 'a [a 'yes] [b 'no])))
+  (let ((a 'a))
+    (import (only (rnrs) case))
+    (and
+      (begin (set! a 'a)
+        (case a ((a) #t) ((b c) #f))
+        (case a ((a) #t) ((b c) #f) (else #f)))
+      (begin (set! a 'b)
+        (case a ((a) #f) ((b c) #t))
+        (case a ((a) #f) ((b c) #t) (else #f)))
+      (begin (set! a 'c)
+        (case a ((a) #f) ((b c) #t))
+        (case a ((a) #f) ((b c) #t) (else #f)))
+      (begin (set! a 'd)
+        (case a ((a) #f) ((b c) #f) (else #t)))))
+  (let ([f (lambda (x)
+             (import (only (rnrs) case))
+             (case x
+               ((#\a) 'case1)
+               ((1/2) 'case2)
+               ((999999999999999) 'case3)
+               ((3.4) 'case4)
+               (else 'oops)))])
+    (and (eq? (f (string-ref "abc" 0)) 'case1)
+         (eq? (f (exact 0.5)) 'case2)
+         (eq? (f (- 1000000000000000 1)) 'case3)
+         (eq? (f (+ 3.0 4/10)) 'case4)
+         (eq? (f 'b) 'oops)))
+  (let ()
+    (import (only (rnrs) case))
+    (case '() [() #f] [else #t]))
+  (let ()
+    (import (only (rnrs) case))
+    (case '() [(()) #t] [else #f]))
+  (equivalent-expansion?
+    (parameterize ([optimize-level 2] [enable-cp0 #f] [#%$suppress-primitive-inlining #f])
+      (expand/optimize '(lambda (x)
+                          (import (only (rnrs) case))
+                          (case x [(a b a 7) 'one] [(c a 7 9) 'two] [else 'three]))))
+    '(lambda (x)
+       (let ([t x])
+         (if (#2%memv t '(a b 7))
+             'one
+             (if (#2%memv t '(c 9))
+                 'two
+                 'three)))))
+  ; ensure we don't miss syntax errors through case discarding unreachable clause bodies
+  (error? ; invalid syntax (if)
+    (lambda (x)
+      (import (only (rnrs) case))
+      (case x
+        [(a) 'one]
+        [(b c) 'two]
+        [(a b c) (if)]
+        [else #f])))
+  ; ensure expansion into cond doesn't cause => to "work" for case
+  (error? ; invalid syntax =>
+    (lambda (x)
+      (import (only (rnrs) case))
+      (case x
+        [(a b c) => values])))
+  (error? ; invalid syntax =>
+    (lambda (x)
+      (import (only (rnrs) case))
+      (case x
+        [(a b c) #f]
+        [(d e f) => values])))
+  (error? ; invalid syntax =>
+    (lambda (x)
+      (import (only (rnrs) case))
+      (case x
+        [(a b c) #f]
+        [(a b c) => values])))
+  (error? ; invalid syntax =>
+    (lambda (x)
+      (import (only (rnrs) case))
+      (case x
+        [(a b c) => values]
+        [else #f])))
+  (error? ; invalid syntax =>
+    (lambda (x)
+      (import (only (rnrs) case))
+      (case x
+        [(a b c) #f]
+        [(d e f) => values]
+        [else #f])))
+  (error? ; invalid syntax =>
+    (lambda (x)
+      (import (only (rnrs) case))
+      (case x
+        [(a b c) #f]
+        [(a b c) => values]
+        [else #f])))
+  (error? ; invalid syntax (case)
+    (let ()
+      (import (only (rnrs) case))
+      (case)))
+)
 
 (mat record-case
    (record-case '(a b c)
@@ -952,7 +1080,23 @@
  ; make sure compiler doesn't bomb w/two few args
   (procedure? (lambda (x) (map x)))
   (error? ; nonprocedure
+    (map 3 '()))
+  (error? ; nonprocedure
+    (map 3 '() '()))
+  (error? ; nonprocedure
     (map 3 '(a b c)))
+  (error? ; nonprocedure
+    (parameterize ([optimize-level 3])
+      (eval '(#2%map 3 '(a b c)))))
+  (error? ; nonprocedure
+    (parameterize ([optimize-level 3])
+      (eval
+        '(let ()
+           (define (f p b)
+             (unbox b)
+             (#2%map p (if (box? b) '() '(1 2 3)))
+             (list p (procedure? p)))
+           (f 7 (box 0))))))
   (error? ; improper list
     (map pretty-print 'a))
   (error? ; improper list
@@ -1076,7 +1220,29 @@
     (test-cp0-expansion equal? '(map (lambda (x) x) '()) ''()))
   (parameterize ([optimize-level 3] [enable-cp0 #t] [#%$suppress-primitive-inlining #f])
     (test-cp0-expansion equal? '(map add1 '() '() '() '()) ''()))
-  ;; map with lambda exp as procedure and lists in the form (list e0 e1 ... en)
+  ;; if map is called only for effects, remove the expression only if the procedure
+  ;; has the correct arity and can't raise an error
+  (equivalent-expansion?
+    (parameterize ([enable-cp0 #t] [#%$suppress-primitive-inlining #f] [optimize-level 2])
+      (expand/optimize
+        '(begin (#3%map list '(5 4 3 2 1 0)) 7)))
+    7)
+  (equivalent-expansion?
+    (parameterize ([enable-cp0 #t] [#%$suppress-primitive-inlining #f] [optimize-level 2])
+      (expand/optimize
+        '(begin (#3%map box? '(5 4 3 2 1 0)) 7)))
+    7)
+  (not (equivalent-expansion?
+         (parameterize ([enable-cp0 #t] [#%$suppress-primitive-inlining #f] [optimize-level 2])
+           (expand/optimize
+             '(begin (#3%map unbox '(5 4 3 2 1 0)) 7)))
+           7))
+  (not (equivalent-expansion?
+         (parameterize ([enable-cp0 #t] [#%$suppress-primitive-inlining #f] [optimize-level 2])
+           (expand/optimize
+             '(begin (#3%map cons '(5 4 3 2 1 0)) 7)))
+           7))
+  ;; map with lambda exp as procedure and lists in the form (list e0 e1 ... en) or '(e0 e1 ... en)
   ;; avoid creating each list and doing the actual map
   (equivalent-expansion?
     (parameterize ([optimize-level 2] [enable-cp0 #t] [#%$suppress-primitive-inlining #f])
@@ -1093,6 +1259,38 @@
            (list 1 2 3)
            (list 4 5 6)
            (list '(7) '(8) '(9)))))
+    '(#3%list 12 15 18))
+  (equivalent-expansion?
+    (parameterize ([optimize-level 2] [enable-cp0 #t] [#%$suppress-primitive-inlining #f])
+      (expand/optimize 
+        '(map (lambda (x y z) (apply + x y z)) 
+           '(1 2 3)
+           (list 4 5 6)
+           (list '(7) '(8) '(9)))))
+    '(#2%list 12 15 18))
+  (equivalent-expansion?
+    (parameterize ([optimize-level 3] [enable-cp0 #t] [#%$suppress-primitive-inlining #f])
+      (expand/optimize 
+        '(map (lambda (x y z) (apply + x y z)) 
+           '(1 2 3)
+           (list 4 5 6)
+           (list '(7) '(8) '(9)))))
+    '(#3%list 12 15 18))
+  (equivalent-expansion?
+    (parameterize ([optimize-level 2] [enable-cp0 #t] [#%$suppress-primitive-inlining #f])
+      (expand/optimize 
+        '(map (lambda (x y z) (apply + x y z)) 
+           '(1 2 3)
+           '(4 5 6)
+           '((7) (8) (9)))))
+    '(#2%list 12 15 18))
+  (equivalent-expansion?
+    (parameterize ([optimize-level 3] [enable-cp0 #t] [#%$suppress-primitive-inlining #f])
+      (expand/optimize 
+        '(map (lambda (x y z) (apply + x y z)) 
+           '(1 2 3)
+           '(4 5 6)
+           '((7) (8) (9)))))
     '(#3%list 12 15 18))
   (equivalent-expansion?
     (parameterize ([optimize-level 2] [enable-cp0 #t] [#%$suppress-primitive-inlining #f])
@@ -1153,12 +1351,51 @@
                         (begin (write 'a) (list (begin (write 'b) 'g) 'j))
                         (begin (write 'c) (list (begin (write 'd) 'h) 'k))
                         (begin (write 'e) (list (begin (write 'f) 'i) 'l))))))
-      '("abcdef((g h . i) (j k . l))\n"
-        "abefcd((g h . i) (j k . l))\n"
-        "cdabef((g h . i) (j k . l))\n"
-        "cdefab((g h . i) (j k . l))\n"
-        "efabcd((g h . i) (j k . l))\n"
-        "efcdab((g h . i) (j k . l))\n"))
+    '("abcdef((g h . i) (j k . l))\n"
+      "abefcd((g h . i) (j k . l))\n"
+      "cdabef((g h . i) (j k . l))\n"
+      "cdefab((g h . i) (j k . l))\n"
+      "efabcd((g h . i) (j k . l))\n"
+      "efcdab((g h . i) (j k . l))\n"))
+  ((lambda (x ls) (and (member x ls) #t))
+    (with-output-to-string
+      (lambda ()
+        (pretty-print (map (lambda (x y z) (cons* x y z))
+                        (begin (write 'ab) '(g j))
+                        (begin (write 'c) (list (begin (write 'd) 'h) 'k))
+                        (begin (write 'e) (list (begin (write 'f) 'i) 'l))))))
+    '("abcdef((g h . i) (j k . l))\n"
+      "abefcd((g h . i) (j k . l))\n"
+      "cdabef((g h . i) (j k . l))\n"
+      "cdefab((g h . i) (j k . l))\n"
+      "efabcd((g h . i) (j k . l))\n"
+      "efcdab((g h . i) (j k . l))\n"))
+  ((lambda (x ls) (and (member x ls) #t))
+    (with-output-to-string
+      (lambda ()
+        (pretty-print (map (lambda (x y z) (cons* x y z))
+                        (begin (write 'a) (list (begin (write 'b) 'g) 'j))
+                        (begin (write 'cd) '(h k))
+                        (begin (write 'e) (list (begin (write 'f) 'i) 'l))))))
+    '("abcdef((g h . i) (j k . l))\n"
+      "abefcd((g h . i) (j k . l))\n"
+      "cdabef((g h . i) (j k . l))\n"
+      "cdefab((g h . i) (j k . l))\n"
+      "efabcd((g h . i) (j k . l))\n"
+      "efcdab((g h . i) (j k . l))\n"))
+  ((lambda (x ls) (and (member x ls) #t))
+    (with-output-to-string
+      (lambda ()
+        (pretty-print (map (lambda (x y z) (cons* x y z))
+                        (begin (write 'a) (list (begin (write 'b) 'g) 'j))
+                        (begin (write 'c) (list (begin (write 'd) 'h) 'k))
+                        (begin (write 'ef) '(i l))))))
+    '("abcdef((g h . i) (j k . l))\n"
+      "abefcd((g h . i) (j k . l))\n"
+      "cdabef((g h . i) (j k . l))\n"
+      "cdefab((g h . i) (j k . l))\n"
+      "efabcd((g h . i) (j k . l))\n"
+      "efcdab((g h . i) (j k . l))\n"))
  )
 
 (mat fold-left
@@ -1187,6 +1424,10 @@
     21)
   (procedure? (lambda (x) (fold-left x)))
   (procedure? (lambda (x) (fold-left x y)))
+  (error? ; nonprocedure
+    (fold-left 3 0 '()))
+  (error? ; nonprocedure
+    (fold-left 3 0 '() '()))
   (error? ; nonprocedure
     (fold-left 3 0 '(a b c)))
   (error? ; improper list
@@ -1311,6 +1552,10 @@
  ; make sure compiler doesn't bomb w/two few args
   (procedure? (lambda (x) (fold-right x)))
   (procedure? (lambda (x) (fold-right x y)))
+  (error? ; nonprocedure
+    (fold-right 3 0 '()))
+  (error? ; nonprocedure
+    (fold-right 3 0 '() '()))
   (error? ; nonprocedure
     (fold-right 3 0 '(a b c)))
   (error? ; improper list
@@ -1490,7 +1735,23 @@
  ; make sure compiler doesn't bomb w/two few args
   (procedure? (lambda (x) (for-each x)))
   (error? ; nonprocedure
+    (for-each 3 '()))
+  (error? ; nonprocedure
+    (for-each 3 '() '()))
+  (error? ; nonprocedure
     (for-each 3 '(a b c)))
+  (error? ; nonprocedure
+    (parameterize ([optimize-level 3])
+      (eval '(#2%for-each 3 '(a b c)))))
+  (error? ; nonprocedure
+    (parameterize ([optimize-level 3])
+      (eval
+        '(let ()
+           (define (f p b)
+             (unbox b)
+             (#2%for-each p (if (box? b) '() '(1 2 3)))
+             (list p (procedure? p)))
+           (f 7 (box 0))))))
   (error? ; improper list
     (for-each pretty-print 'a))
   (error? ; improper list
@@ -1817,6 +2078,162 @@
       (u a p k f 1) (v b q l g 2) (w c r m h 3) (x d s n i 4)
       (y e t o j 5) (a u p k f 1) (b v q l g 2) (c w r m h 3)
       (d x s n i 4) (e y t o j 5)))
+  ;; cp0 optimizations for for-each
+  ;; for-each with an empty list(s) always (void)
+  (parameterize ([optimize-level 2] [enable-cp0 #t] [#%$suppress-primitive-inlining #f])
+    (test-cp0-expansion equal? '(for-each (lambda (x) x) '()) '(#2%void)))
+  (parameterize ([optimize-level 2] [enable-cp0 #t] [#%$suppress-primitive-inlining #f])
+    (test-cp0-expansion equal? '(for-each add1 '() '() '() '()) '(#2%void)))
+  (parameterize ([optimize-level 3] [enable-cp0 #t] [#%$suppress-primitive-inlining #f])
+    (test-cp0-expansion equal? '(for-each (lambda (x) x) '()) '(#2%void)))
+  (parameterize ([optimize-level 3] [enable-cp0 #t] [#%$suppress-primitive-inlining #f])
+    (test-cp0-expansion equal? '(for-each add1 '() '() '() '()) '(#2%void)))
+  ;; remove for-each the expression only if the procedure
+  ;; has the correct arity and can't raise an error
+  (equivalent-expansion?
+    (parameterize ([enable-cp0 #t] [#%$suppress-primitive-inlining #f] [optimize-level 2])
+      (expand/optimize
+        '(#3%for-each list '(5 4 3 2 1 0))))
+    '(#2%void))
+  (equivalent-expansion?
+    (parameterize ([enable-cp0 #t] [#%$suppress-primitive-inlining #f] [optimize-level 2])
+      (expand/optimize
+        '(#3%for-each box? '(5 4 3 2 1 0))))
+    '(#2%void))
+  (not (equivalent-expansion?
+         (parameterize ([enable-cp0 #t] [#%$suppress-primitive-inlining #f] [optimize-level 2])
+           (expand/optimize
+             '(#3%for-each unbox '(5 4 3 2 1 0))))
+           '(#2%void)))
+  (not (equivalent-expansion?
+         (parameterize ([enable-cp0 #t] [#%$suppress-primitive-inlining #f] [optimize-level 2])
+           (expand/optimize
+             '(#3%for-each cons '(5 4 3 2 1 0))))
+           '(#2%void)))
+  ;; for-each with lambda exp as procedure and lists in the form (list e0 e1 ... en) or '(e0 e1 ... en)
+  ;; avoid creating each list and doing the actual for-each
+  (equivalent-expansion?
+    (parameterize ([optimize-level 2] [enable-cp0 #t] [#%$suppress-primitive-inlining #f])
+      (expand/optimize 
+        '(for-each (lambda (x y z) (display (apply + x y z))) 
+           (list 1 2 3)
+           (list 4 5 6)
+           (list '(7) '(8) '(9)))))
+    '(begin (#2%display 12) (#2%display 15) (#2%display 18)))
+  (equivalent-expansion?
+    (parameterize ([optimize-level 3] [enable-cp0 #t] [#%$suppress-primitive-inlining #f])
+      (expand/optimize 
+        '(for-each (lambda (x y z) (display (apply + x y z))) 
+           (list 1 2 3)
+           (list 4 5 6)
+           (list '(7) '(8) '(9)))))
+    '(begin (#3%display 12) (#3%display 15) (#3%display 18)))
+  (equivalent-expansion?
+    (parameterize ([optimize-level 2] [enable-cp0 #t] [#%$suppress-primitive-inlining #f])
+      (expand/optimize 
+        '(for-each (lambda (x y z) (display (apply + x y z))) 
+           '(1 2 3)
+           (list 4 5 6)
+           (list '(7) '(8) '(9)))))
+    '(begin (#2%display 12) (#2%display 15) (#2%display 18)))
+  (equivalent-expansion?
+    (parameterize ([optimize-level 3] [enable-cp0 #t] [#%$suppress-primitive-inlining #f])
+      (expand/optimize 
+        '(for-each (lambda (x y z) (display (apply + x y z))) 
+           '(1 2 3)
+           (list 4 5 6)
+           (list '(7) '(8) '(9)))))
+    '(begin (#3%display 12) (#3%display 15) (#3%display 18)))
+  (equivalent-expansion?
+    (parameterize ([optimize-level 2] [enable-cp0 #t] [#%$suppress-primitive-inlining #f])
+      (expand/optimize 
+        '(for-each (lambda (x y z) (display (apply + x y z))) 
+           '(1 2 3)
+           '(4 5 6)
+           '((7) (8) (9)))))
+    '(begin (#2%display 12) (#2%display 15) (#2%display 18)))
+  (equivalent-expansion?
+    (parameterize ([optimize-level 3] [enable-cp0 #t] [#%$suppress-primitive-inlining #f])
+      (expand/optimize 
+        '(for-each (lambda (x y z) (display (apply + x y z))) 
+           '(1 2 3)
+           '(4 5 6)
+           '((7) (8) (9)))))
+    '(begin (#3%display 12) (#3%display 15) (#3%display 18)))
+  (equal?
+    (with-output-to-string
+      (lambda ()
+        (for-each (begin (write 'ab) (lambda (x y) (write (cons x y))))
+          (begin (write 'a) (list (begin (write 'b) 'c)))
+          (begin (write 'a) (list (begin (write 'b) 'd))))))
+    "ababab(c . d)")
+  ((lambda (x ls) (and (member x ls) #t))
+    (with-output-to-string
+      (lambda ()
+        (for-each (lambda (x y) (write (cons x y)))
+          (list (begin (write 'a) 'c) (begin (write 'b) 'd))
+          (list (begin (write 'x) 'e) (begin (write 'y) 'f)))))
+    ; lots of valid possibilities, but make sure we don't interleave and get, e.g., axby
+    '("abxy(c . e)(d . f)"
+      "abyx(c . e)(d . f)"
+      "baxy(c . e)(d . f)"
+      "bayx(c . e)(d . f)"
+      "xyab(c . e)(d . f)"
+      "yxab(c . e)(d . f)"
+      "xyba(c . e)(d . f)"
+      "yxba(c . e)(d . f)"))
+  ((lambda (x ls) (and (member x ls) #t))
+    (with-output-to-string
+      (lambda ()
+        (for-each (lambda (x y z) (write (cons* x y z)))
+          (begin (write 'a) (list (begin (write 'b) 'g) 'j))
+          (begin (write 'c) (list (begin (write 'd) 'h) 'k))
+          (begin (write 'e) (list (begin (write 'f) 'i) 'l)))))
+    '("abcdef(g h . i)(j k . l)"
+      "abefcd(g h . i)(j k . l)"
+      "cdabef(g h . i)(j k . l)"
+      "cdefab(g h . i)(j k . l)"
+      "efabcd(g h . i)(j k . l)"
+      "efcdab(g h . i)(j k . l)"))
+  ((lambda (x ls) (and (member x ls) #t))
+    (with-output-to-string
+      (lambda ()
+        (for-each (lambda (x y z) (write (cons* x y z)))
+          (begin (write 'ab) '(g j))
+          (begin (write 'c) (list (begin (write 'd) 'h) 'k))
+          (begin (write 'e) (list (begin (write 'f) 'i) 'l)))))
+    '("abcdef(g h . i)(j k . l)"
+      "abefcd(g h . i)(j k . l)"
+      "cdabef(g h . i)(j k . l)"
+      "cdefab(g h . i)(j k . l)"
+      "efabcd(g h . i)(j k . l)"
+      "efcdab(g h . i)(j k . l)"))
+  ((lambda (x ls) (and (member x ls) #t))
+    (with-output-to-string
+      (lambda ()
+        (for-each (lambda (x y z) (write (cons* x y z)))
+          (begin (write 'a) (list (begin (write 'b) 'g) 'j))
+          (begin (write 'cd) '(h k))
+          (begin (write 'e) (list (begin (write 'f) 'i) 'l)))))
+    '("abcdef(g h . i)(j k . l)"
+      "abefcd(g h . i)(j k . l)"
+      "cdabef(g h . i)(j k . l)"
+      "cdefab(g h . i)(j k . l)"
+      "efabcd(g h . i)(j k . l)"
+      "efcdab(g h . i)(j k . l)"))
+  ((lambda (x ls) (and (member x ls) #t))
+    (with-output-to-string
+      (lambda ()
+        (for-each (lambda (x y z) (write (cons* x y z)))
+          (begin (write 'a) (list (begin (write 'b) 'g) 'j))
+          (begin (write 'c) (list (begin (write 'd) 'h) 'k))
+          (begin (write 'ef) '(i l)))))
+    '("abcdef(g h . i)(j k . l)"
+      "abefcd(g h . i)(j k . l)"
+      "cdabef(g h . i)(j k . l)"
+      "cdefab(g h . i)(j k . l)"
+      "efabcd(g h . i)(j k . l)"
+      "efcdab(g h . i)(j k . l)"))
  )
 
 (mat ormap
@@ -1840,6 +2257,10 @@
    (not (ormap (lambda (x y z) #t) '() '() '()))
  ; make sure compiler doesn't bomb w/two few args
   (procedure? (lambda (x) (ormap x)))
+  (error? ; nonprocedure
+    (ormap 3 '()))
+  (error? ; nonprocedure
+    (ormap 3 '() '()))
   (error? ; nonprocedure
     (ormap 3 '(a b c)))
   (error? ; improper list
@@ -1942,6 +2363,10 @@
  ; make sure compiler doesn't bomb w/two few args
   (procedure? (lambda (x) (andmap x)))
   (error? ; nonprocedure
+    (andmap 3 '()))
+  (error? ; nonprocedure
+    (andmap 3 '() '()))
+  (error? ; nonprocedure
     (andmap 3 '(a b c)))
   (error? ; improper list
     (andmap values 'a))
@@ -2043,6 +2468,10 @@
  ; make sure compiler doesn't bomb w/two few args
   (procedure? (lambda (x) (exists x)))
   (error? ; nonprocedure
+    (exists 3 '()))
+  (error? ; nonprocedure
+    (exists 3 '() '()))
+  (error? ; nonprocedure
     (exists 3 '(a b c)))
   (error? ; improper list
     (exists not 'a))
@@ -2143,6 +2572,10 @@
    (eq? (for-all (lambda (x y z) #t) '() '() '()) #t)
  ; make sure compiler doesn't bomb w/two few args
   (procedure? (lambda (x) (for-all x)))
+  (error? ; nonprocedure
+    (for-all 3 '()))
+  (error? ; nonprocedure
+    (for-all 3 '() '()))
   (error? ; nonprocedure
     (for-all 3 '(a b c)))
   (error? ; improper list
@@ -2988,6 +3421,25 @@
              (collect 0 0)
              (list ((g1)) p)))))
      '((c d) (b)))
+
+   (eq? (with-interrupts-disabled
+          (let* ([g (make-guardian)] [x (list 'a 'b)])
+            (g x)
+            (collect 0 0)
+            (#%$keep-live x)
+            (g)))
+        #f)
+
+   (or (not (threaded?))
+       (equal?
+         (parameterize ([collect-request-handler void])
+           (let ([g (make-guardian)])
+             (fork-thread (lambda () (g (list 'a 'b))))
+             (let f () (when (> (length (#%$thread-list)) 1) (f)))
+             (collect)
+             (g)))
+         '(a b)))
+
    (parameterize ([collect-request-handler void] [enable-object-counts #t])
      (define-record-type fraz (fields zle))
      (define g (make-guardian))
@@ -3029,6 +3481,195 @@
               (begin (collect (collect-maximum-generation))
                      (bwp-object? (car x))))))
  )
+
+(mat ephemeron
+   (begin
+     (define ephemeron-key car)
+     (define ephemeron-value cdr)
+     
+     (define gdn (make-guardian))
+     #t)
+
+   (ephemeron-pair? (ephemeron-cons 1 2))
+
+   (begin
+     ;; ----------------------------------------
+     ;; Check that the ephemeron value doesn't retain
+     ;; itself as an epehemeron key
+     (define-values (es wps saved)
+       (let loop ([n 1000] [es '()] [wps '()] [saved '()])
+         (cond
+          [(zero? n)
+           (values es wps saved)]
+          [else
+           (let ([k1 (gensym)]
+                 [k2 (gensym)])
+             (gdn k2)
+             (loop (sub1 n)
+                   (cons (ephemeron-cons k1 (box k1))
+                         (cons (ephemeron-cons k2 (box k2))
+                               es))
+                   (weak-cons k1 (weak-cons k2 wps))
+                   (cons k1 saved)))])))
+     
+     (collect (collect-maximum-generation))
+
+     ;; All now waiting to be reported by the guardian
+     (let loop ([es es] [wps wps] [saved saved])
+       (cond
+        [(null? saved) #t]
+        [else
+         (and
+          (eq? (car saved) (car wps))
+          (eq? (car saved) (ephemeron-key (car es)))
+          (eq? (car saved) (unbox (ephemeron-value (car es))))
+          (eq? (cadr wps) (ephemeron-key (cadr es)))
+          (eq? (cadr wps) (unbox (ephemeron-value (cadr es))))
+          (loop (cddr es) (cddr wps) (cdr saved)))])))
+
+   (begin
+     ;; Report each from the guardian:
+     (let loop ([saved saved])
+       (unless (null? saved)
+         (gdn)
+         (loop (cdr saved))))
+
+     (collect (collect-maximum-generation))
+
+     (let loop ([es es] [wps wps] [saved saved])
+       (cond
+        [(null? saved) #t]
+        [else
+         (and
+          (eq? (car saved) (car wps))
+          (eq? (car saved) (ephemeron-key (car es)))
+          (eq? (car saved) (unbox (ephemeron-value (car es))))
+          (eq? #!bwp (cadr wps))
+          (eq? #!bwp (ephemeron-key (cadr es)))
+          (eq? #!bwp (ephemeron-value (cadr es)))
+          (loop (cddr es) (cddr wps) (cdr saved)))])))
+
+   ;; ----------------------------------------
+   ;; Stress test to check that the GC doesn't suffer from quadratic
+   ;; behavior
+   (let ()
+     (define (wrapper v) (list 1 2 3 4 5 v))
+     
+     ;; Create a chain of ephemerons where we have all
+     ;; the the ephemerons immediately in a list,
+     ;; but we discover the keys one at a time
+     (define (mk n prev-key es)
+       (cond
+        [(zero? n)
+         (values prev-key es)]
+        [else
+         (let ([key (gensym)])
+           (mk (sub1 n)
+               key
+               (cons (ephemeron-cons key (wrapper prev-key))
+                     es)))]))
+
+     ;; Create a chain of ephemerons where we have all
+     ;; of the keys immediately in a list,
+     ;; but we discover the ephemerons one at a time
+     (define (mk* n prev-e keys)
+       (cond
+        [(zero? n)
+         (values prev-e keys)]
+        [else
+         (let ([key (gensym)])
+           (mk* (sub1 n)
+                (ephemeron-cons key (wrapper prev-e))
+                (cons key
+                      keys)))]))
+
+     (define (measure-time n keep-alive)
+       ;; Hang the discover-keys-one-at-a-time chain
+       ;; off the end of the discover-ephemerons-one-at-a-time
+       ;; chain, which is the most complex case for avoiding
+       ;; quadratic GC times
+       (parameterize ([collect-request-handler void] [collect-maximum-generation (max (collect-maximum-generation) 2)])
+         (collect 2)
+         (let*-values ([(key es) (mk n (gensym) '())]
+                       [(root holds) (mk* n key es)])
+           (let ([start (current-time)])
+             (collect 0 1)
+             (collect 1 2)
+             (collect 2 2)
+             (let ([delta (time-difference (current-time) start)])
+               ;; Sanity check on ephemerons
+               (for-each (lambda (e)
+                           (when (eq? #!bwp (ephemeron-key e))
+                             (error 'check "oops")))
+                         es)
+               ;; Keep `root` and `holds` live:
+               (keep-alive (cons root holds))
+               ;; Return duration:
+               delta)))))
+
+     (define N 10000)
+
+     ;; The first time should be roughy x10 the second (not x100)
+     (let loop ([tries 3])
+       (define dummy #f)
+       (define (keep-alive v) (set! dummy (cons dummy v)))
+       (define t1 (measure-time (* 10 N) keep-alive))
+       (define dummy2 (set! dummy #f))
+       (define t2 (measure-time N keep-alive))
+       (define (duration->inexact t) (+ (* (time-second t) 1e9)
+                                        (inexact (time-nanosecond t))))
+       (set! dummy #f)
+       (let ([t1 (duration->inexact t1)] [t2 (duration->inexact t2)])
+         (or (< (/ t1 t2) 20)
+           (begin
+             (printf "t1 = ~s, t2 = ~s, t1/t2 = ~s\n" t1 t2 (/ t1 t2))
+             (and (positive? tries)
+               (loop (sub1 tries))))))))
+
+   ;; ----------------------------------------
+   ;; Check interaction of mutation and generations
+   
+   ;; This check disables interrups so that a garbage collection
+   ;; happens only for the explicit `collect` request.
+   (with-interrupts-disabled
+     (let ([e (ephemeron-cons (gensym) 'ok)])
+       (collect 0) ; => `e` is moved to generation 1
+       (and
+         (eq? #!bwp (ephemeron-key e))
+         (eq? #!bwp (ephemeron-value e))
+         (let ([s (gensym)])
+           (set-car! e s)
+           (set-cdr! e 'ok-again)
+           (collect 0) ; => `s` is moved to generation 1
+           (and
+             (eq? s (ephemeron-key e))
+             (eq? 'ok-again (ephemeron-value e))
+             (begin
+               (set! s #f)
+               (collect 1) ; collect former `s`
+               (and
+                 (eq? #!bwp (ephemeron-key e))
+                 (eq? #!bwp (ephemeron-value e)))))))))
+
+   ;; ----------------------------------------
+   ;; Check fasl:
+   (let ([s (gensym)])
+     (define-values (o get) (open-bytevector-output-port))
+     (fasl-write (list s
+                       (ephemeron-cons s 'ok))
+                 o)
+     (let* ([l (fasl-read (open-bytevector-input-port (get)))]
+            [e (cadr l)])
+       (and
+        (eq? (car l) (ephemeron-key e))
+        (eq? 'ok (ephemeron-value e))
+        (begin
+          (set! s #f)
+          (set! l #f)
+          (collect (collect-maximum-generation))
+          (and
+           (eq? #!bwp (ephemeron-key e))
+           (eq? #!bwp (ephemeron-value e))))))))
 
 (mat $primitive
    (procedure? #%car)

@@ -1,5 +1,5 @@
 /* globals.h
- * Copyright 1984-2016 Cisco Systems, Inc.
+ * Copyright 1984-2017 Cisco Systems, Inc.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@
  */
 
 /* globals that do NOT need to be preserved in a saved heap.
- * they must be initalized each time the system is brought up. */
+ * they must be initialized each time the system is brought up. */
 
 /* gc.c */
 EXTERN IBOOL S_checkheap;
@@ -24,7 +24,7 @@ EXTERN uptr S_checkheap_errors;
 EXTERN ptr S_child_processes[static_generation+1];
 #endif /* WIN32 */
 
-/* main.c */
+/* scheme.c */
 EXTERN IBOOL S_boot_time;
 EXTERN IBOOL S_errors_to_console;
 EXTERN ptr S_threads;
@@ -64,7 +64,7 @@ EXTERN ptr S_foreign_dynamic;
 
 /* globals that do need to be preserved in a saved heap */
 EXTERN struct {
-  /* main.c */
+  /* scheme.c */
     double thread_context[size_tc / sizeof(double)];
     ptr active_threads_id;
     ptr error_invoke_code_object;
@@ -73,6 +73,9 @@ EXTERN struct {
     ptr heap_reserve_ratio_id;
     IBOOL retain_static_relocation;
     IBOOL enable_object_counts;
+    ptr scheme_version_id;
+    ptr make_load_binary_id;
+    ptr load_binary;
 
   /* foreign.c */
     ptr foreign_static;
@@ -107,7 +110,6 @@ EXTERN struct {
     ptr nuate_id;
     ptr null_continuation_id;
     ptr collect_request_pending_id;
-    ptr dummy_continuation_code;
 
   /* gc.c */
     ptr guardians[static_generation+1];

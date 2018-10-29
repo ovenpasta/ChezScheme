@@ -1,7 +1,7 @@
 #! /bin/sh
 
 # workarea
-# Copyright 1984-2016 Cisco Systems, Inc.
+# Copyright 1984-2017 Cisco Systems, Inc.
 # 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -33,10 +33,10 @@ fi
 case "$M" in
   a6fb) ;;
   a6le) ;;
-  a6ob) ;;
-  a6osx) ;;
   a6nb) ;;
   a6nt) ;;
+  a6ob) ;;
+  a6osx) ;;
   a6s2) ;;
   a6mw) ;;
   arm32le) ;;
@@ -52,10 +52,10 @@ case "$M" in
   ppc32le) ;;
   ta6fb) ;;
   ta6le) ;;
+  ta6nb) ;;
   ta6nt) ;;
   ta6ob) ;;
   ta6osx) ;;
-  ta6nb) ;;
   ta6s2) ;;
   ta6mw) ;;
   tarm32le) ;;
@@ -138,6 +138,11 @@ fi
 if [ ! -e $W/c/Mf-config ] ; then
   touch $W/c/Mf-config
 fi
+case $M in
+  *nt)
+    (cd $W/c; workln ../../c/vs.bat vs.bat)
+    ;;
+esac
 
 workdir $W/s
 (cd $W/s; workln ../../s/Mf-$M Mf-$M)
@@ -152,6 +157,11 @@ workdir $W/mats
 (cd $W/mats; forceworkln Mf-$M Makefile)
 (cd $W/mats; workln ../../mats/Mf-base Mf-base)
 (cd $W/mats; workln ../../mats/Mf-exobj Mf-exobj)
+case $M in
+  *nt)
+    (cd $W/mats; workln ../../mats/vs.bat vs.bat)
+    ;;
+esac
 
 for dir in `echo examples unicode` ; do
   workdir $W/$dir
@@ -195,8 +205,8 @@ case $M in
   *nt)
     (cd $W/boot/$M; workln ../../../boot/$M/mainmd.obj mainmd.obj)
     (cd $W/boot/$M; workln ../../../boot/$M/mainmt.obj mainmt.obj)
-    (cd $W/boot/$M; workln ../../../boot/$M/csv941md.lib csv941md.lib)
-    (cd $W/boot/$M; workln ../../../boot/$M/csv941mt.lib csv941mt.lib)
+    (cd $W/boot/$M; workln ../../../boot/$M/csv951md.lib csv951md.lib)
+    (cd $W/boot/$M; workln ../../../boot/$M/csv951mt.lib csv951mt.lib)
     (cd $W/boot/$M; workln ../../../boot/$M/scheme.res scheme.res)
     ;;
   *)
@@ -211,8 +221,8 @@ case $M in
   *nt)
     (cd $W/bin/$M; workln ../../../bin/$M/scheme.exe scheme.exe)
     (cd $W/bin/$M; forceworkln2 scheme.exe petite.exe)
-    (cd $W/bin/$M; workln ../../../bin/$M/csv941.dll csv941.dll)
-    (cd $W/bin/$M; workln ../../../bin/$M/csv941.lib csv941.lib)
+    (cd $W/bin/$M; workln ../../../bin/$M/csv951.dll csv951.dll)
+    (cd $W/bin/$M; workln ../../../bin/$M/csv951.lib csv951.lib)
     ;;
   *)
     (cd $W/bin/$M; workln ../../../bin/$M/scheme scheme)

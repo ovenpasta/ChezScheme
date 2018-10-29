@@ -1,5 +1,5 @@
 /* main.c
- * Copyright 1984-2016 Cisco Systems, Inc.
+ * Copyright 1984-2017 Cisco Systems, Inc.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,13 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-/****
-  This is the default custom.c file defining main, which must be present
-  in order to build an executable file.
-
-  See the file custom/sample.c for a customized variant of this file.
-****/
 
 #include <stdlib.h>
 #include <string.h>
@@ -66,7 +59,24 @@ static const char *path_last(const char *p) {
   return p;
 }
 
+#ifdef WIN32
+#define GETENV Sgetenv
+#define GETENV_FREE free
+int wmain(int argc, wchar_t* wargv[], wchar_t* wenvp[]) {
+  const char** argv = (char**)malloc((argc + 1) * sizeof(char*));
+  for (int i = 0; i < argc; i++) {
+    wchar_t* warg = wargv[i];
+    if (NULL == (argv[i] = Swide_to_utf8(warg))) {
+      fprintf_s(stderr, "Invalid argument: %S\n", warg);
+      exit(1);
+    }
+  }
+  argv[argc] = NULL;
+#else /* WIN32 */
+#define GETENV getenv
+#define GETENV_FREE (void)
 int main(int argc, const char *argv[]) {
+#endif /* WIN32 */
   int n, new_argc = 1;
 #ifdef SAVEDHEAPS
   int compact = 1, savefile_level = 0;
@@ -313,13 +323,23 @@ int main(int argc, const char *argv[]) {
   if (import_notify != 0) {
     CALL1("import-notify", Strue);
   }
-  if (libdirs == 0) libdirs = getenv("CHEZSCHEMELIBDIRS");
-  if (libdirs != 0) {
-    CALL1("library-directories", Sstring(libdirs));
+  if (libdirs == 0) {
+    char *cslibdirs = GETENV("CHEZSCHEMELIBDIRS");
+    if (cslibdirs != 0) {
+      CALL1("library-directories", Sstring_utf8(cslibdirs, -1));
+      GETENV_FREE(cslibdirs);
+    }
+  } else {
+    CALL1("library-directories", Sstring_utf8(libdirs, -1));
   }
-  if (libexts == 0) libexts = getenv("CHEZSCHEMELIBEXTS");
-  if (libexts != 0) {
-    CALL1("library-extensions", Sstring(libexts));
+  if (libexts == 0) {
+    char *cslibexts = GETENV("CHEZSCHEMELIBEXTS");
+    if (cslibexts != 0) {
+      CALL1("library-extensions", Sstring_utf8(cslibexts, -1));
+      GETENV_FREE(cslibexts);
+    }
+  } else {
+    CALL1("library-extensions", Sstring_utf8(libexts, -1));
   }
   if (compile_imported_libraries != 0) {
     CALL1("compile-imported-libraries", Strue);
@@ -333,7 +353,7 @@ int main(int argc, const char *argv[]) {
    /* Sscheme_script invokes the value of the scheme-script parameter */
     status = Sscheme_script(scriptfile, new_argc, argv);
   else if (programfile != (char *)0)
-   /* Sscheme_script invokes the value of the scheme-script parameter */
+   /* Sscheme_program invokes the value of the scheme-program parameter */
     status = Sscheme_program(programfile, new_argc, argv);
   else {
    /* Sscheme_start invokes the value of the scheme-start parameter */

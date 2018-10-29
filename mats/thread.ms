@@ -1,5 +1,5 @@
 ;;; thread.ms
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -113,7 +113,12 @@
                   (errorf #f "extra threads running ~s" ls)]
                  [else (loop (- n 1) nnt)]))]))
         #t))
-    (andmap procedure? (list $threads $fib $thread-check)))
+    (define $time-in-range?
+      (lambda (start stop target)
+        (let ([t (time-difference stop start)])
+          (<= (abs (- (+ (time-second t) (* (time-nanosecond t) 1e-9)) target))
+              0.1))))
+    (andmap procedure? (list $threads $fib $thread-check $time-in-range?)))
   ($thread-check)
   (not (= (let ([n #f])
             (fork-thread (lambda () (set! n (get-thread-id))))
@@ -144,29 +149,71 @@
            (if (= n 0)
                '()
                (cons i (iota (+ i 1) (- n 1))))]))
-     ; w/o the occasional pretty-print, following mat hangs under Windows
-     ; theory is that looping main thread shuts out one of the child
-     ; threads.
       (define-syntax parallel-list
         (syntax-rules ()
           [(_ x ...)
-           (let ([v (make-vector (length '(x ...)) #f)])
+           (let ([v (make-vector (length '(x ...)) #f)]
+                 [m (make-mutex)]
+                 [c (make-condition)]
+                 [n (length '(x ...))])
              (map (lambda (p i) (p i))
                (list (lambda (i)
-                       (fork-thread (lambda () (vector-set! v i x))))
+                       (fork-thread
+                        (lambda ()
+                          (vector-set! v i x)
+                          (with-mutex m
+                            (set! n (- n 1))
+                            (when (= n 0)
+                              (condition-signal c))))))
                      ...)
                (iota (length '(x ...))))
-             (let f ([n 0])
-               (let ([ls (vector->list v)])
-                 (if (andmap values ls)
-                     ls
-                     (if (= n 1000000)
-                         (begin (pretty-print ls) (f 0))
-                         (f (+ n 1)))))))]))
+             (and (with-mutex m
+                    (condition-wait c m (make-time 'time-duration 0 60)))
+                  (vector->list v)))]))
       (parallel-list (fatfib 26) (fatfib 27) (fatfib 28)
         (fatfib 29) (fatfib 30) (fatfib 31)))
     '(196418 317811 514229 832040 1346269 2178309))
   ($thread-check)
+  (let ([m (make-mutex)] [c (make-condition)])
+    (with-mutex m
+      (let* ([start (current-time)]
+             [r (condition-wait c m (make-time 'time-duration 250000000 1))]
+             [stop (current-time)])
+        (and (not r)
+             ($time-in-range? start stop 1.25)))))
+  (let ([m (make-mutex)] [c (make-condition)])
+    (with-mutex m
+      (let* ([start (current-time)]
+             [r (condition-wait c m
+                  (add-duration start (make-time 'time-duration 250000000 1)))]
+             [stop (current-time)])
+        (and (not r)
+             ($time-in-range? start stop 1.25)))))
+  (let ([m (make-mutex)] [c (make-condition)])
+    (with-mutex m
+      (let* ([start (current-time)]
+             [r (condition-wait c m (make-time 'time-duration 0 -1))]
+             [stop (current-time)])
+        (and (not r)
+             ($time-in-range? start stop 0.0)))))
+  (let ([m (make-mutex)] [c (make-condition)])
+    (with-mutex m
+      (let* ([start (current-time)]
+             [r (condition-wait c m
+                  (add-duration start (make-time 'time-duration 0 -1)))]
+             [stop (current-time)])
+        (and (not r)
+             ($time-in-range? start stop 0.0)))))
+  (let ([m (make-mutex)] [c (make-condition)])
+    (with-mutex m
+      (fork-thread
+       (lambda ()
+         (with-mutex m (sleep (make-time 'time-duration 250000000 0)))))
+      (let* ([start (current-time)]
+             [r (condition-wait c m (make-time 'time-duration 100000000 0))]
+             [stop (current-time)])
+        (and (not r)
+             ($time-in-range? start stop 0.25)))))
   (let ([count 300] [live 0] [live-m (make-mutex)])
     (parameterize ([collect-request-handler
                     (lambda ()
@@ -1388,6 +1435,27 @@
                 (condition-wait c m)
                 (loop))))))
     -1.5)
+  ($thread-check)
+  (parameterize ([collect-request-handler void])
+    (define (expect-error what thunk)
+      (guard (c [(and (message-condition? c)
+                      (equal? (condition-message c)
+                        (format "~a is defunct" what)))])
+        (thunk)
+        (error #f "error expected")))
+    (let ([g (make-guardian)])
+      (g (make-mutex))
+      (collect)
+      (let ([m (g)])
+        (expect-error 'mutex (lambda () (mutex-acquire m)))
+        (expect-error 'mutex (lambda () (mutex-release m)))
+        (expect-error 'mutex (lambda () (condition-wait (make-condition) m))))
+      (g (make-condition))
+      (collect)
+      (let ([c (g)])
+        (expect-error 'condition (lambda () (condition-wait c (make-mutex))))
+        (expect-error 'condition (lambda () (condition-broadcast c)))
+        (expect-error 'condition (lambda () (condition-signal c))))))
  )
 
 (mat make-thread-parameter
@@ -1418,4 +1486,40 @@
                       (equal? (condition-irritants c) (list 'a)))])
         (p 'a)))
  )
+
+(mat cas
+ (begin
+   (define (check container container-ref container-cas!)
+     (let ([N 1000]
+           [M 4]
+           [done 0]
+           [m (make-mutex)]
+           [c (make-condition)])
+       (define (bump)
+         (let loop ([i 0])
+           (unless (= i N)
+             (let ([v (container-ref container)])
+               (if (container-cas! container v (add1 v))
+                   (loop (add1 i))
+                   (loop i)))))
+         (mutex-acquire m)
+         (set! done (add1 done))
+         (condition-signal c)
+         (mutex-release m))
+       (let loop ([j 0])
+         (when (< j M)
+           (fork-thread bump)
+           (loop (add1 j))))
+       (mutex-acquire m)
+       (let loop ()
+         (cond
+          [(= done M)
+           (mutex-release m)]
+          [else
+           (condition-wait c m)
+           (loop)]))
+       (= (container-ref container) (* M N))))
+   (check (box 0) unbox box-cas!))
+ (check (vector 1 0 2) (lambda (v) (vector-ref v 1)) (lambda (v o n) (vector-cas! v 1 o n))))
+
 )

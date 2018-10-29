@@ -1,6 +1,6 @@
 "newhash.ss"
 ;;; newhash.ss
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -61,6 +61,7 @@ Documentation notes:
 ;;; other generic hash operators
 (define hashtable-cell)
 (define hashtable-weak?)                 ; hashtable
+(define hashtable-ephemeron?)            ; hashtable
 
 ;;; eq-hashtable operators
 (define make-weak-eq-hashtable)          ; [k], k >= 0
@@ -71,6 +72,7 @@ Documentation notes:
 (define eq-hashtable-cell)               ; eq-hashtable key default
 (define eq-hashtable-delete!)            ; eq-hashtable key
 (define eq-hashtable-weak?)              ; eq-hashtable
+(define eq-hashtable-ephemeron?)         ; eq-hashtable
 
 ;;; eq-hashtable operators
 (define make-symbol-hashtable)           ; [k], k >= 0
@@ -85,7 +87,7 @@ Documentation notes:
 (define make-weak-eqv-hashtable)         ; [k], k >= 0
   
 ;;; unsafe eq-hashtable operators
-(define $make-eq-hashtable)              ; fxminlen weak?, fxminlen = 2^n, n >= 0
+(define $make-eq-hashtable)              ; fxminlen subtype, fxminlen = 2^n, n >= 0
 (define $eq-hashtable-keys)              ; eq-hashtable
 (define $eq-hashtable-values)            ; eq-hashtable
 (define $eq-hashtable-entries)           ; eq-hashtable
@@ -393,8 +395,8 @@ Documentation notes:
         [else (logxor (lognot (number-hash (real-part z))) (number-hash (imag-part z)))])))
 
   (set! $make-eq-hashtable ; assumes minlen is a power of two >= 1
-    (lambda (minlen weak?)
-      (make-eq-ht 'eq #t ($make-eqhash-vector minlen) minlen 0 weak?)))
+    (lambda (minlen subtype)
+      (make-eq-ht 'eq #t ($make-eqhash-vector minlen) minlen 0 subtype)))
 
   (set-who! $hashtable-veclen
     (lambda (h)
@@ -444,8 +446,11 @@ Documentation notes:
  ; csv7 interface
   (set! make-hash-table
     (case-lambda
-      [() ($make-eq-hashtable (constant hashtable-default-size) #f)]
-      [(weak?) ($make-eq-hashtable (constant hashtable-default-size) weak?)]))
+      [() ($make-eq-hashtable (constant hashtable-default-size) (constant eq-hashtable-subtype-normal))]
+      [(weak?) ($make-eq-hashtable (constant hashtable-default-size)
+                                   (if weak?
+                                       (constant eq-hashtable-subtype-weak)
+                                       (constant eq-hashtable-subtype-normal)))]))
 
   (set! hash-table?
     (lambda (x)
@@ -488,13 +493,18 @@ Documentation notes:
 
   (set-who! make-eq-hashtable
     (case-lambda
-      [() ($make-eq-hashtable (constant hashtable-default-size) #f)]
-      [(k) ($make-eq-hashtable (size->minlen who k) #f)]))
+      [() ($make-eq-hashtable (constant hashtable-default-size) (constant eq-hashtable-subtype-normal))]
+      [(k) ($make-eq-hashtable (size->minlen who k) (constant eq-hashtable-subtype-normal))]))
 
   (set-who! make-weak-eq-hashtable
     (case-lambda
-      [() ($make-eq-hashtable (constant hashtable-default-size) #t)]
-      [(k) ($make-eq-hashtable (size->minlen who k) #t)]))
+      [() ($make-eq-hashtable (constant hashtable-default-size) (constant eq-hashtable-subtype-weak))]
+      [(k) ($make-eq-hashtable (size->minlen who k) (constant eq-hashtable-subtype-weak))]))
+
+  (set-who! make-ephemeron-eq-hashtable
+    (case-lambda
+      [() ($make-eq-hashtable (constant hashtable-default-size) (constant eq-hashtable-subtype-ephemeron))]
+      [(k) ($make-eq-hashtable (size->minlen who k) (constant eq-hashtable-subtype-ephemeron))]))
 
   (let ()
     (define $make-hashtable
@@ -507,9 +517,9 @@ Documentation notes:
             (make-symbol-ht 'symbol #t (make-vector minlen '()) minlen 0 equiv?)
             (make-gen-ht 'generic #t (make-vector minlen '()) minlen 0 hash equiv?))))
     (define $make-eqv-hashtable
-      (lambda (minlen weak?)
+      (lambda (minlen subtype)
         (make-eqv-ht 'eqv #t
-          ($make-eq-hashtable minlen weak?)
+          ($make-eq-hashtable minlen subtype)
           ($make-hashtable minlen number-hash eqv?))))
     (set-who! make-hashtable
       (case-lambda
@@ -523,12 +533,16 @@ Documentation notes:
          ($make-hashtable (size->minlen who k) hash equiv?)]))
     (set-who! make-eqv-hashtable
       (case-lambda
-        [() ($make-eqv-hashtable (constant hashtable-default-size) #f)]
-        [(k) ($make-eqv-hashtable (size->minlen who k) #f)]))
+        [() ($make-eqv-hashtable (constant hashtable-default-size) (constant eq-hashtable-subtype-normal))]
+        [(k) ($make-eqv-hashtable (size->minlen who k) (constant eq-hashtable-subtype-normal))]))
     (set-who! make-weak-eqv-hashtable
       (case-lambda
-        [() ($make-eqv-hashtable (constant hashtable-default-size) #t)]
-        [(k) ($make-eqv-hashtable (size->minlen who k) #t)])))
+        [() ($make-eqv-hashtable (constant hashtable-default-size) (constant eq-hashtable-subtype-weak))]
+        [(k) ($make-eqv-hashtable (size->minlen who k) (constant eq-hashtable-subtype-weak))]))
+    (set-who! make-ephemeron-eqv-hashtable
+      (case-lambda
+        [() ($make-eqv-hashtable (constant hashtable-default-size) (constant eq-hashtable-subtype-ephemeron))]
+        [(k) ($make-eqv-hashtable (size->minlen who k) (constant eq-hashtable-subtype-ephemeron))])))
 
   (set! eq-hashtable-ref
     (lambda (h x v)
@@ -577,14 +591,27 @@ Documentation notes:
   (set-who! eq-hashtable-weak?
     (lambda (h)
       (unless (eq-ht? h) ($oops who "~s is not an eq hashtable" h))
-      (eq-ht-weak? h)))
+      (eq? (constant eq-hashtable-subtype-weak) (eq-ht-subtype h))))
+
+  (set-who! eq-hashtable-ephemeron?
+    (lambda (h)
+      (unless (eq-ht? h) ($oops who "~s is not an eq hashtable" h))
+      (eq? (constant eq-hashtable-subtype-ephemeron) (eq-ht-subtype h))))
 
   (set-who! hashtable-weak?
     (lambda (h)
       (unless (xht? h) ($oops who "~s is not a hashtable" h))
       (case (xht-type h)
-        [(eq) (eq-ht-weak? h)]
-        [(eqv) (eq-ht-weak? (eqv-ht-eqht h))]
+        [(eq) (eq? (constant eq-hashtable-subtype-weak) (eq-ht-subtype h))]
+        [(eqv) (eq? (constant eq-hashtable-subtype-weak) (eq-ht-subtype (eqv-ht-eqht h)))]
+        [else #f])))
+
+  (set-who! hashtable-ephemeron?
+    (lambda (h)
+      (unless (xht? h) ($oops who "~s is not a hashtable" h))
+      (case (xht-type h)
+        [(eq) (eq? (constant eq-hashtable-subtype-ephemeron) (eq-ht-subtype h))]
+        [(eqv) (eq? (constant eq-hashtable-subtype-ephemeron) (eq-ht-subtype (eqv-ht-eqht h)))]
         [else #f])))
 
   (set-who! symbol-hashtable-ref
@@ -905,7 +932,7 @@ Documentation notes:
                            (values hc i)
                            (let ([i/2 (fxsrl (fx+ i 1) 1)])
                              (let-values ([(hc i^) (f (vector-ref x j) hc i/2)])
-                               (g (fx+ j 0) hc (fx+ (fx- i i/2) i^))))))))]
+                               (g (fx+ j 1) hc (fx+ (fx- i i/2) i^))))))))]
               [(null? x) (values (update hc 496904691) i)]
               [(box? x) (f (unbox x) (update hc 410225874) i)]
               [(symbol? x) (values (update hc (symbol-hash x)) i)]
@@ -914,6 +941,21 @@ Documentation notes:
               [(bytevector? x) (values (update hc (bytevector-hash x)) i)]
               [(boolean? x) (values (update hc (if x 336200167 307585980)) i)]
               [(char? x) (values (update hc (char->integer x)) i)]
+              [(and ($record? x) ($record-hash-procedure x))
+               => (lambda (rec-hash)
+                    (let ([new-i i])
+                      (let ([sub-hc (rec-hash
+                                      x
+                                      (lambda (v)
+                                        (if (fx<= new-i 0)
+                                            0
+                                            (let-values ([(sub-hc sub-i) (f v 0 i)])
+                                              (set! new-i sub-i)
+                                              sub-hc))))])
+                        (let ([hc (update hc (if (fixnum? sub-hc)
+                                                 sub-hc
+                                                 (modulo (abs sub-hc) (greatest-fixnum))))])
+                          (values hc new-i)))))]
               [else (values (update hc 120634730) i)])))
         (let-values ([(hc i) (f x 523658599 64)])
           (hcabs hc)))))
@@ -989,11 +1031,11 @@ Documentation notes:
 
   (set! $eq-hashtable-copy
     (lambda (h1 mutable?)
-      (let ([weak? (eq-ht-weak? h1)])
+      (let ([subtype (eq-ht-subtype h1)])
         (let* ([vec1 (ht-vec h1)]
                [n (vector-length vec1)]
                [vec2 ($make-eqhash-vector n)]
-               [h2 (make-eq-ht 'eq mutable? vec2 (ht-minlen h1) (ht-size h1) weak?)])
+               [h2 (make-eq-ht 'eq mutable? vec2 (ht-minlen h1) (ht-size h1) subtype)])
           (let outer ([i 0])
             (if (fx= i n)
                 h2
@@ -1004,7 +1046,10 @@ Documentation notes:
                           b
                           ($make-tlc h2
                             (let* ([keyval ($tlc-keyval b)] [key (car keyval)] [val (cdr keyval)])
-                              (if weak?  (weak-cons key val) (cons key val)))
+                              (cond
+                               [(eq? subtype (constant eq-hashtable-subtype-normal)) (cons key val)]
+                               [(eq? subtype (constant eq-hashtable-subtype-weak)) (weak-cons key val)]
+                               [else (ephemeron-cons key val)]))
                             (inner ($tlc-next b))))))
                   (outer (fx+ i 1)))))
           h2))))
@@ -1023,4 +1068,109 @@ Documentation notes:
         (ht-size-set! h 0)
         (unless (fx= n minlen)
           (ht-vec-set! h ($make-eqhash-vector minlen))))))
+  
+  (let ()
+    ;; An equal/hash mapping contains an equal or hash procedure (or #f)
+    ;; plus the rtd where the procedure was installed. It also has a weak
+    ;; list of uids for child rtds that have inherited the setting, in
+    ;; case the rtd's setting changes.
+    (define-record-type equal/hash
+      (fields maybe-proc rtd (mutable inheritors))
+      (nongenerative)
+      (sealed #t)
+      (protocol
+        (lambda (new)
+          (lambda (maybe-proc rtd)
+            (new maybe-proc rtd '())))))
+
+    (let ()
+      (define (get-equal/hash who rtd key)
+        (unless (record-type-descriptor? rtd)
+          ($oops who "~s is not a record-type descriptor" rtd))
+        (let ([e/h ($sgetprop (record-type-uid  rtd) key #f)])
+          (and e/h
+               (eq? (equal/hash-rtd e/h) rtd)
+               (equal/hash-maybe-proc e/h))))
+      (define (set-equal/hash! who rtd key proc)
+        (unless (record-type-descriptor? rtd)
+          ($oops who "~s is not a record-type descriptor" rtd))
+        (unless (or (not proc) (procedure? proc))
+          ($oops who "~s is not a procedure or #f" proc))
+        (with-tc-mutex
+          (let* ([uid (record-type-uid rtd)]
+                 [old-e/h ($sgetprop uid key #f)])
+            ;; Remove the old record from anywhere that it's inherited,
+            ;; and a later lookup will re-inherit:
+            (when old-e/h
+              (for-each
+                (lambda (uid)
+                  (unless (bwp-object? uid)
+                    (when (eq? ($sgetprop uid key #f) old-e/h)
+                      ($sremprop uid key))))
+                (equal/hash-inheritors old-e/h)))
+            (if proc
+                ($sputprop uid key (make-equal/hash proc rtd))
+                ($sremprop uid key)))))
+      (set-who! record-type-equal-procedure
+        (case-lambda
+          [(rtd) (get-equal/hash who rtd 'equal-proc)]
+          [(rtd equal-proc) (set-equal/hash! who rtd 'equal-proc equal-proc)]))
+      (set-who! record-type-hash-procedure
+        (case-lambda
+          [(rtd) (get-equal/hash who rtd 'hash-proc)]
+          [(rtd hash-proc) (set-equal/hash! who rtd 'hash-proc hash-proc)])))
+
+    (let ()
+      ;; Gets an `equal/hash` record for the given rtd, finding
+      ;; it from a parent rtd and caching if necessary:
+      (define (lookup-equal/hash record key)
+        (let* ([rtd ($record-type-descriptor record)] [uid (record-type-uid rtd)])
+          ; Get out quick w/o mutex if equal/hash record is present
+          (or ($sgetprop uid key #f)
+              (with-tc-mutex
+                (let f ([uid uid] [rtd rtd])
+                  ;; Double-check first time around to avoid a race
+                  (or ($sgetprop uid key #f)
+                      (let ([parent-rtd (record-type-parent rtd)])
+                        (if parent-rtd
+                            ;; Cache parent's value, and register as an inheritor:
+                            (let ([e/h (f (record-type-uid parent-rtd) parent-rtd)])
+                              (equal/hash-inheritors-set! e/h (weak-cons uid (equal/hash-inheritors e/h)))
+                              ($sputprop uid key e/h)
+                              e/h)
+                            ;; Cache an empty `equal/hash` record:
+                            (let ([e/h (make-equal/hash #f rtd)])
+                              ($sputprop uid key e/h)
+                              e/h)))))))))
+      (let ()
+        (define (lookup-equal-procedure record1 record2)
+          (let ([e/h (lookup-equal/hash record1 'equal-proc)])
+            (let ([proc (equal/hash-maybe-proc e/h)])
+              (if proc
+                  (and
+                    (eq? (equal/hash-rtd (lookup-equal/hash record2 'equal-proc)) (equal/hash-rtd e/h))
+                    proc)
+                  (let ([default-proc (default-record-equal-procedure)])
+                    (and default-proc
+                         (not (equal/hash-maybe-proc (lookup-equal/hash record2 'equal-proc)))
+                         default-proc))))))
+        (set-who! $record-equal-procedure
+          (lambda (record1 record2)
+            (lookup-equal-procedure record1 record2)))
+        (set-who! record-equal-procedure
+          (lambda (record1 record2)
+            (unless ($record? record1) ($oops who "~s is not a record" record1))
+            (unless ($record? record2) ($oops who "~s is not a record" record2))
+            (lookup-equal-procedure record1 record2))))
+      (let ()
+        (define (lookup-hash-procedure record)
+          (or (equal/hash-maybe-proc (lookup-equal/hash record 'hash-proc))
+              (default-record-hash-procedure)))
+        (set-who! $record-hash-procedure
+          (lambda (record)
+            (lookup-hash-procedure record)))
+        (set-who! record-hash-procedure
+          (lambda (record)
+            (unless ($record? record) ($oops who "~s is not a record" record))
+            (lookup-hash-procedure record))))))
 )

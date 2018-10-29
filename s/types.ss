@@ -1,5 +1,5 @@
 ;;; types.ss
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -24,10 +24,15 @@
       (case-lambda
         [(expression source stripped) (new expression source stripped (fxlogor (constant annotation-debug) (constant annotation-profile)))]
         [(expression source stripped flags) (new expression source stripped flags)]))))
- 
+
 (define-record-type source
   (fields (immutable sfd) (immutable bfp) (immutable efp))
-  (nongenerative #{source bc9ao7qsvpf38krv-a})
+  (nongenerative #{source gbwctw0mahurbuiegp7uq3-0}))
+
+(define-record-type source-2d
+  (parent source)
+  (fields (immutable line) (immutable column))
+  (nongenerative #{source-2d gbwctw0mahurbuiegp7uq3-2})
   (sealed #t))
 
 (define-record-type source-file-descriptor

@@ -1,5 +1,5 @@
 # Makefile.in
-# Copyright 1984-2016 Cisco Systems, Inc.
+# Copyright 1984-2017 Cisco Systems, Inc.
 # 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,6 +21,9 @@ build:
 install:
 	(cd $(workarea) && $(MAKE) install)
 
+uninstall:
+	(cd $(workarea) && $(MAKE) uninstall)
+
 test:
 	(cd $(workarea) && $(MAKE) test PREFIX=$(workarea)/)
 
@@ -35,8 +38,10 @@ clean:
 	(cd $(workarea) && $(MAKE) clean)
 
 distclean:
-	(cd csug ; make reallyreallyclean)
-	(cd release_notes ; make reallyreallyclean)
+	(cd csug ; if [ -e Makefile ] ; then make reallyreallyclean ; fi)
+	rm -f csug/Makefile
+	(cd release_notes ; if [ -e Makefile ] ; then make reallyreallyclean ; fi)
+	rm -f release_notes/Makefile
 	rm -rf $(workarea)
 	rm -f Makefile
 	rm -f Make.out

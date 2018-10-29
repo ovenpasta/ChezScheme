@@ -1,4 +1,4 @@
-% Copyright 2005-2016 Cisco Systems, Inc.
+% Copyright 2005-2018 Cisco Systems, Inc.
 % 
 % Licensed under the Apache License, Version 2.0 (the "License");
 % you may not use this file except in compliance with the License.
@@ -16,13 +16,13 @@
 
 \centerline{}\vfill
 
-\textbf{\copyright~2005--2016 Cisco Systems, Inc.}
+\textbf{\copyright~2005--2018 Cisco Systems, Inc.}
 
 Licensed under the Apache License Version 2.0\\
 http://www.apache.org/licenses/LICENSE-2.0
 
 % NB: also update corresponding notice in csug.stex
-Revised \INSERTREVISIONMONTHSPACEYEAR for Chez Scheme Version 9.4.1.
+Revised \revisiondate~for Chez Scheme Version 9.5.1.
 
 \medskip\noindent
 Cisco and the Cisco logo are trademarks or registered trademarks

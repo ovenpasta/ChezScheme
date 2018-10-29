@@ -1,6 +1,6 @@
 "7.ss"
 ;;; 7.ss
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -129,7 +129,7 @@
               (let ([k (get-u8 p)])
                 (f k (logor (ash n 7) (fxsrl k 1))))
               n))))
-    (define (malformed p) ($oops "malformed fasl-object header found in ~s" p))
+    (define (malformed p) ($oops 'fasl-read "malformed fasl-object header found in ~s" p))
     (define (check-header p)
       (let ([bv (make-bytevector 8 (constant fasl-type-header))])
         (unless (and (eqv? (get-bytevector-n! p bv 1 7) 7)
@@ -184,37 +184,53 @@
 
 (let ()
   (define do-load-binary
-    (lambda (who fn ip situation for-import?)
-      (module (Lexpand? visit-stuff? visit-stuff-inner revisit-stuff? revisit-stuff-inner
-               recompile-info? library/ct-info? library/rt-info? program-info?)
-        (import (nanopass))
-        (include "base-lang.ss")
-        (include "expand-lang.ss"))
-      (define unexpected-value!
-        (lambda (x)
-          ($oops who "unexpected value ~s read from ~a" x fn)))
-      (let loop ()
-        (let ([x (fasl-read ip)])
-          (define run-inner
-            (lambda (x)
-              (cond
-                [(procedure? x) (x)]
-                [(library/rt-info? x) ($install-library/rt-desc x for-import? fn)]
-                [(library/ct-info? x) ($install-library/ct-desc x for-import? fn)]
-                [(program-info? x) ($install-program-desc x)]
-                [else (unexpected-value! x)])))
-          (define run-outer
-            (lambda (x)
-              (cond
-                [(recompile-info? x) (void)]
-                [(revisit-stuff? x) (when (memq situation '(load revisit)) (run-inner (revisit-stuff-inner x)))]
-                [(visit-stuff? x) (when (memq situation '(load visit)) (run-inner (visit-stuff-inner x)))]
-                [else (run-inner x)])))
-          (cond
-            [(eof-object? x) (close-port ip)]
-            [(vector? x) (vector-for-each run-outer x) (loop)]
-            [(Lexpand? x) ($interpret-backend x situation for-import? fn) (loop)]
-            [else (run-outer x) (loop)])))))
+    (lambda (who fn ip situation for-import? results?)
+      (let ([load-binary (make-load-binary who fn situation for-import?)])
+        (let loop ([lookahead-x #f])
+          (let* ([x (or lookahead-x (fasl-read ip))]
+                 [next-x (and results? (not (eof-object? x)) (fasl-read ip))])
+            (cond
+             [(eof-object? x) (close-port ip)]
+             [(and results? (eof-object? next-x)) (load-binary x)]
+             [else (load-binary x) (loop next-x)]))))))
+
+  (define (make-load-binary who fn situation for-import?)
+    (module (Lexpand? visit-stuff? visit-stuff-inner revisit-stuff? revisit-stuff-inner
+              recompile-info? library/ct-info? library/rt-info? program-info?)
+      (import (nanopass))
+      (include "base-lang.ss")
+      (include "expand-lang.ss"))
+    (define unexpected-value!
+      (lambda (x)
+        ($oops who "unexpected value ~s read from ~a" x fn)))
+    (define run-inner
+      (lambda (x)
+        (cond
+         [(procedure? x) (x)]
+         [(library/rt-info? x) ($install-library/rt-desc x for-import? fn)]
+         [(library/ct-info? x) ($install-library/ct-desc x for-import? fn)]
+         [(program-info? x) ($install-program-desc x)]
+         [else (unexpected-value! x)])))
+    (define run-outer
+      (lambda (x)
+        (cond
+         [(recompile-info? x) (void)]
+         [(revisit-stuff? x) (when (memq situation '(load revisit)) (run-inner (revisit-stuff-inner x)))]
+         [(visit-stuff? x) (when (memq situation '(load visit)) (run-inner (visit-stuff-inner x)))]
+         [else (run-inner x)])))
+    (define run-vector
+      (lambda (x i)
+        (cond
+         [(fx= (fx+ i 1) (vector-length x))
+          (run-outer (vector-ref x i))]
+         [else
+          (run-outer (vector-ref x i))
+          (run-vector x (fx+ i 1))])))
+    (lambda (x)
+      (cond
+       [(vector? x) (run-vector x 0)]
+       [(Lexpand? x) ($interpret-backend x situation for-import? fn)]
+       [else (run-outer x)])))
 
   (define (do-load who fn situation for-import? ksrc)
     (let ([ip ($open-file-input-port who fn)])
@@ -234,7 +250,7 @@
                         (begin (set-port-position! ip start-pos) 0)))])
           (port-file-compressed! ip)
           (if ($compiled-file-header? ip)
-              (do-load-binary who fn ip situation for-import?)
+              (do-load-binary who fn ip situation for-import? #f)
               (begin
                 (when ($port-flags-set? ip (constant port-flag-compressed))
                   ($oops who "missing header for compiled file ~s" fn))
@@ -245,6 +261,16 @@
                   ; whack ip so on-reset close-port call above closes the text port
                   (set! ip (transcoded-port ip (current-transcoder)))
                   (ksrc ip sfd ($make-read ip sfd fp)))))))))
+
+  (set! $make-load-binary
+    (lambda (fn situation for-import?)
+      (make-load-binary '$make-load-binary fn situation for-import?)))
+
+  (set-who! load-compiled-from-port
+    (lambda (ip)
+      (unless (and (input-port? ip) (binary-port? ip))
+        ($oops who "~s is not a binary input port" ip))
+      (do-load-binary who (port-name ip) ip 'load #f #t)))
 
   (set-who! load-program
     (rec load-program
@@ -631,7 +657,7 @@
 
 (define $scheme-greeting
   (lambda ()
-    (format "~a\nCopyright 1984-2016 Cisco Systems, Inc.\n"
+    (format "~a\nCopyright 1984-2017 Cisco Systems, Inc.\n"
       (scheme-version))))
 
 (define $session-key #f)
@@ -669,8 +695,12 @@
                   "~%[collecting generation ~s into generation ~s..."
                   g gtarget)
                 (flush-output-port (console-output-port)))
+              (when (eqv? g (collect-maximum-generation))
+                ($clear-source-lines-cache))
               (do-gc g gtarget)
               ($close-resurrected-files)
+              (when-feature pthreads
+                ($close-resurrected-mutexes&conditions))
               (when (collect-notify)
                 (fprintf (console-output-port) "done]~%")
                 (flush-output-port (console-output-port)))
@@ -745,6 +775,12 @@
                    (or (eqv? gtarget g) (eqv? gtarget (fx+ g 1))))
          ($oops who "invalid target generation ~s for generation ~s" gtarget g))
        (collect2 g (if (eq? gtarget 'static) (constant static-generation) gtarget))])))
+
+(set! collect-rendezvous
+  (let ([fire-collector (foreign-procedure "(cs)fire_collector" () void)])
+    (lambda ()
+      (fire-collector)
+      ($collect-rendezvous))))
 
 (set! keyboard-interrupt-handler
    ($make-thread-parameter

@@ -1,5 +1,5 @@
 ;;; misc.ms
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -272,6 +272,18 @@
        (case-lambda
          [() (q 0)]
          [(x) (q)])))
+   ; regression tests for non-tail-call mref lvalue destination
+   (begin
+     (define (c1-f a)
+       (let ([x (fxvector 0)])
+         (lambda (v) (fxvector-set! x 0 (modulo v a)) x)))
+     #t)
+   (equal? ((c1-f 7) 10) #vfx(3))
+   (begin
+     (define (c1-id x) x)
+     (define (c1-g x) (vector-set-fixnum! x 0 (c1-id 17)))
+     #t)
+   (equal? (let ([v (vector 3)]) (c1-g v) v) '#(17))
 )
 
 (mat compiler2 ; random tests
@@ -604,6 +616,12 @@
                   17)))])
         (cons v ls)))
     '(3 17 17))
+  ; regression test for bug in which $flonum-exponent read past mapped memory
+  (eq?
+    (do ([n 2000 (- n 1)] [ls (iota 2000)])
+        ((= n 0) 'fini)
+      (map (lambda (x) (let ([x (exact (sqrt -2.0))]) x)) ls))
+    'fini)
 )
 
 (mat compiler3
@@ -1474,6 +1492,23 @@
            (define x (f))
            x)))
     '17)
+  ; check for regression: cpvalid leaving behind a cpvalid-defer form
+  (equivalent-expansion?
+    (parameterize ([run-cp0 (lambda (cp0 x) x)]
+                   [optimize-level 2])
+      (expand/optimize '(letrec* ([f (letrec ([x x]) (lambda () x))]) 0)))
+    '(let ([f (let ([valid? #f])
+                (let ([x (#2%void)])
+                  (set! x
+                    (begin
+                      (if valid?
+                          (#2%void)
+                          (#2%$source-violation #f #f #t
+                            "attempt to reference undefined variable ~s" 'x))
+                      x))
+                  (set! valid? #t)
+                  (lambda () x)))])
+       0))
 )
 
 (mat compile-profile
@@ -1990,6 +2025,30 @@
       (1 "testfile-triv.ss" 30 60 2 1)
       (5 "testfile-triv.ss" 42 59 2 13)))
   (eqv? (profile-clear) (void))
+)
+
+(mat generate-procedure-source-information
+  (begin
+    (define the-source
+      (let ([sfd (make-source-file-descriptor "the-source.ss" (open-bytevector-input-port '#vu8()))])
+        (make-source-object sfd 10 20)))
+    (define (make-proc full-inspect?)
+      (parameterize ([generate-inspector-information full-inspect?]
+                     [generate-procedure-source-information #t])
+        (let ([e '(lambda (x) x)])
+          (compile (make-annotation e the-source e)))))
+    (define proc-i (make-proc #t))
+    (define proc-n (make-proc #f))
+    (and (procedure? proc-i)
+         (procedure? proc-n)))
+  (equal? (((inspect/object proc-i) 'code) 'source-object)
+          the-source)
+  (equal? (((inspect/object proc-n) 'code) 'source-object)
+          the-source)
+  (equal? ((((inspect/object proc-i) 'code) 'source) 'value)
+          '(lambda (x) x))
+  (equal? (((inspect/object proc-n) 'code) 'source)
+          #f)
 )
 
 (mat strip-fasl-file
@@ -4842,6 +4901,20 @@
           (pariah 1)
           (* n (f (fx- n 1)))))
     3628800)
+  ; make sure that cp0 doesn't remove the pariah form
+  (equivalent-expansion?
+    (parameterize ([enable-cp0 #t] [#%$suppress-primitive-inlining #f])
+      (expand/optimize
+        '(if (zero? (random 1000))
+             (pariah (display 0))
+             (display 1))))
+    (if (= (optimize-level) 3)
+        '(if (#3%zero? (#3%random 1000))
+             (begin (pariah (void)) (#3%display 0))
+             (#3%display 1))
+        '(if (#2%zero? (#2%random 1000))
+             (begin (pariah (void)) (#2%display 0))
+             (#2%display 1))))
 )
 
 (mat $read-time-stamp-counter
@@ -4872,3 +4945,109 @@
                         (fx+ success 1)
                         success)))))))
 )
+
+(mat procedure-arity-mask
+  (equal? (procedure-arity-mask (lambda () #f)) 1)
+  (equal? (procedure-arity-mask (lambda (x) x)) 2)
+  (equal? (procedure-arity-mask (lambda (x y z w) x)) 16)
+  (or (eq? (current-eval) interpret)
+      (equal? (procedure-arity-mask (lambda (x y z w a b c d e f g h i j) x)) (ash 1 14)))
+  (or (eq? (current-eval) interpret)
+      (and
+        (equal? (procedure-arity-mask (case-lambda)) 0)
+        (equal? (procedure-arity-mask (case-lambda [(x) x] [(x y) y])) 6)
+        (equal? (procedure-arity-mask (case-lambda [() x] [(x . y) y])) -1)
+        (equal? (procedure-arity-mask (case-lambda [() x] [(x y . z) y])) (bitwise-not 2))
+        (equal? (procedure-arity-mask (case-lambda [(x y . z) y] [() x])) (bitwise-not 2))
+        (equal? (procedure-arity-mask (case-lambda [(x) x] [(x y) y] [(x y z) z])) 14)))
+  (equal? (procedure-arity-mask list) -1)
+  (equal? (procedure-arity-mask cons) 4)
+  (equal? (procedure-arity-mask list*) (bitwise-not 1))
+
+  (equal? (procedure-arity-mask +) -1)
+  (equal? (procedure-arity-mask -) -2)
+  (equal? (procedure-arity-mask max) -2)
+
+  (equal? (call/cc procedure-arity-mask) -1)
+  (equal? (call/1cc procedure-arity-mask) -1)
+  (equal? (procedure-arity-mask #%$null-continuation) 0)
+  (equal?
+    (parameterize ([enable-cp0 #t]) (compile '(procedure-arity-mask
+                                                (case-lambda [a a] [(b) b]))))
+    -1)
+  (equal?
+    (parameterize ([enable-cp0 #f]) (compile '(procedure-arity-mask
+                                                (case-lambda [a a] [(b) b]))))
+    -1)
+
+  (error? ; invalid argument
+    (procedure-arity-mask 17))
+  )
+
+(mat procedure-name
+  (begin
+    (define (procedure-name f)
+      (((inspect/object f) 'code) 'name))
+    (define (ok-name? name expect)
+      (or (equal? name expect)
+          ;; interpreter currently doesn't keep names
+          (eq? (current-eval) interpret)))
+    (define should-be-named-f (let ([f (lambda (x) x)]) f))
+    (define should-be-named-g (letrec ([g (lambda (x) x)]) g))
+    (define should-be-named-h (let ([f (let ([h (lambda (x) x)]) h)]) f))
+    (define should-be-named-i (letrec ([f (let ([i (lambda (x) x)]) i)]) f))
+    (define should-be-named-j (let ([f (letrec ([j (lambda (x) x)]) j)]) f))
+    #t)
+  (ok-name? (procedure-name procedure-name) "procedure-name")
+  (ok-name? (procedure-name should-be-named-f) "f")
+  (ok-name? (procedure-name should-be-named-g) "g")
+  (ok-name? (procedure-name should-be-named-h) "h")
+  (ok-name? (procedure-name should-be-named-i) "i")
+  (ok-name? (procedure-name should-be-named-j) "j"))
+
+(mat fasl-immutable
+  (begin
+    (define immutable-objs (list (vector->immutable-vector '#(1 2 3))
+                                 (fxvector->immutable-fxvector '#vfx(1 2 3))
+                                 (string->immutable-string "abc")
+                                 (bytevector->immutable-bytevector #vu8(1 2 3))
+                                 (box-immutable 1)))
+    (define immutable-zero-objs (list (vector->immutable-vector '#())
+                                      (fxvector->immutable-fxvector '#vfx())
+                                      (string->immutable-string "")
+                                      (bytevector->immutable-bytevector #vu8())
+                                      (box-immutable 1)))
+    (define (immutable? l)
+      (and (immutable-vector? (list-ref l 0))
+           (immutable-fxvector? (list-ref l 1))
+           (immutable-string? (list-ref l 2))
+           (immutable-bytevector? (list-ref l 3))
+           (immutable-box? (list-ref l 4))))
+    (define (round-trip l)
+      (let-values ([(o get) (open-bytevector-output-port)])
+        (fasl-write l o)
+        (immutable? (fasl-read (open-bytevector-input-port (get))))))
+    (define (round-trip-via-strip l)
+      (compile-to-file (list `(set! fasl-immutable-round-trip ',l)) "testfile-immut-sff.so")
+      (strip-fasl-file "testfile-immut-sff.so" "testfile-immut-sff.so" (fasl-strip-options))
+      (load "testfile-immut-sff.so")
+      (let ([l2 (eval 'fasl-immutable-round-trip)])
+        (and (equal? l l2)
+             (immutable? l2))))
+    #t)
+
+  (immutable? immutable-objs)
+  (immutable? immutable-zero-objs)
+  (round-trip immutable-objs)
+  (round-trip immutable-zero-objs)
+  (round-trip-via-strip immutable-objs)
+  (round-trip-via-strip immutable-zero-objs)
+
+  ;; Make sure `fasl-read` didn't mark "mutable" null values
+  ;; as immutable:
+  (mutable-vector? '#())
+  (mutable-fxvector? '#vfx())
+  (mutable-string? "")
+  (mutable-bytevector? '#vu8())
+  
+ )

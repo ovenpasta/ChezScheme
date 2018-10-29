@@ -1,5 +1,5 @@
 /* fasl.c
- * Copyright 1984-2016 Cisco Systems, Inc.
+ * Copyright 1984-2017 Cisco Systems, Inc.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -97,6 +97,7 @@
  *                 <uptr free>       # number of free variables
  *                 <uptr n>          # length in bytes of code
  *                 <fasl name>
+ *                 <fasl arity-mask> # two's complement encoding of accepted argument counts
  *                 <fasl info>       # inspector info
  *                 <fasl pinfo*>     # profiling info
  *                 <byte code1>...<byte coden>
@@ -320,7 +321,7 @@ ptr S_boot_read(gzFile file, const char *path) {
   ptr tc = get_thread_context();
   struct unbufFaslFileObj uffo;
 
-  uffo.path = S_string(path, -1);
+  uffo.path = Sstring_utf8(path, -1);
   uffo.type = UFFO_TYPE_GZ;
   uffo.file = file;
   return fasl_entry(tc, &uffo);
@@ -607,8 +608,11 @@ static void faslin(ptr tc, ptr *x, ptr t, ptr *pstrbuf, faslFile f) {
             return;
         }
         case fasl_type_box:
+        case fasl_type_immutable_box:
             *x = Sbox(FIX(0));
             faslin(tc, &INITBOXREF(*x), t, pstrbuf, f);
+            if (ty == fasl_type_immutable_box)
+              BOXTYPE(*x) = type_immutable_box;
             return;
         case fasl_type_symbol: {
             iptr n;
@@ -634,15 +638,23 @@ static void faslin(ptr tc, ptr *x, ptr t, ptr *pstrbuf, faslFile f) {
             faslin(tc, &EXACTNUM_IMAG_PART(*x), t, pstrbuf, f);
             return;
         case fasl_type_group:
-        case fasl_type_vector: {
+        case fasl_type_vector:
+        case fasl_type_immutable_vector: {
             iptr n; ptr *p;
             n = uptrin(f);
             *x = S_vector(n);
             p = &INITVECTIT(*x, 0);
             while (n--) faslin(tc, p++, t, pstrbuf, f);
+            if (ty == fasl_type_immutable_vector) {
+              if (Svector_length(*x) == 0)
+                *x = NULLIMMUTABLEVECTOR(tc);
+              else
+                VECTTYPE(*x) |= vector_immutable_flag;
+            }
             return;
         }
-        case fasl_type_fxvector: {
+        case fasl_type_fxvector:
+        case fasl_type_immutable_fxvector: {
             iptr n; ptr *p;
             n = uptrin(f);
             *x = S_fxvector(n);
@@ -652,13 +664,26 @@ static void faslin(ptr tc, ptr *x, ptr t, ptr *pstrbuf, faslFile f) {
               if (!FIXRANGE(t)) toolarge(f->uf->path);
               *p++ = FIX(t);
             }
+            if (ty == fasl_type_immutable_fxvector) {
+              if (Sfxvector_length(*x) == 0)
+                *x = NULLIMMUTABLEFXVECTOR(tc);
+              else
+                FXVECTOR_TYPE(*x) |= fxvector_immutable_flag;
+            }
             return;
         }
-        case fasl_type_bytevector: {
+        case fasl_type_bytevector:
+        case fasl_type_immutable_bytevector: {
             iptr n;
             n = uptrin(f);
             *x = S_bytevector(n);
             bytesin(&BVIT(*x,0), n, f);
+            if (ty == fasl_type_immutable_bytevector) {
+              if (Sbytevector_length(*x) == 0)
+                *x = NULLIMMUTABLEBYTEVECTOR(tc);
+              else
+                BYTEVECTOR_TYPE(*x) |= bytevector_immutable_flag;
+            }
             return;
         }
         case fasl_type_base_rtd: {
@@ -697,7 +722,7 @@ static void faslin(ptr tc, ptr *x, ptr t, ptr *pstrbuf, faslFile f) {
             return;
         }
         case fasl_type_eq_hashtable: {
-            ptr rtd, ht, v; IBOOL weakp; uptr veclen, i, n;
+            ptr rtd, ht, v; uptr subtype; uptr veclen, i, n;
             if ((rtd = S_G.eq_ht_rtd) == Sfalse) {
               S_G.eq_ht_rtd = rtd = SYMVAL(S_intern((const unsigned char *)"$eq-ht-rtd"));
               if (!Srecordp(rtd)) S_error_abort("$eq-ht-rtd has not been set");
@@ -706,7 +731,15 @@ static void faslin(ptr tc, ptr *x, ptr t, ptr *pstrbuf, faslFile f) {
             RECORDINSTTYPE(ht) = rtd;
             INITPTRFIELD(ht,eq_hashtable_type_disp) = S_G.eq_symbol;
             INITPTRFIELD(ht,eq_hashtable_mutablep_disp) = bytein(f) ? Strue : Sfalse;
-            INITPTRFIELD(ht,eq_hashtable_weakp_disp) = (weakp = bytein(f)) ? Strue : Sfalse;
+            switch ((subtype = bytein(f))) {
+            case eq_hashtable_subtype_normal:
+            case eq_hashtable_subtype_weak:
+            case eq_hashtable_subtype_ephemeron:
+              INITPTRFIELD(ht,eq_hashtable_subtype_disp) = FIX(subtype);
+              break;
+            default:
+              S_error2("", "invalid eq-hashtable subtype code", FIX(subtype), f->uf->path);
+            }
             INITPTRFIELD(ht,eq_hashtable_minlen_disp) = FIX(uptrin(f));
             veclen = uptrin(f);
             INITPTRFIELD(ht,eq_hashtable_vec_disp) = v = S_vector(veclen);
@@ -715,7 +748,18 @@ static void faslin(ptr tc, ptr *x, ptr t, ptr *pstrbuf, faslFile f) {
             for (i = 0; i < veclen ; i += 1) { INITVECTIT(v, i) = FIX(i); }
             while (n > 0) {
               ptr keyval;
-              keyval = weakp ? S_cons_in(space_weakpair, 0, FIX(0), FIX(0)) : Scons(FIX(0), FIX(0));
+              switch (subtype) {
+              case eq_hashtable_subtype_normal:
+                keyval = Scons(FIX(0), FIX(0));
+                break;
+              case eq_hashtable_subtype_weak:
+                keyval = S_cons_in(space_weakpair, 0, FIX(0), FIX(0));
+                break;
+              case eq_hashtable_subtype_ephemeron:
+              default:
+                keyval = S_cons_in(space_ephemeron, 0, FIX(0), FIX(0));
+                break;
+              }
               faslin(tc, &INITCAR(keyval), t, pstrbuf, f);
               faslin(tc, &INITCDR(keyval), t, pstrbuf, f);
               i = ((uptr)Scar(keyval) >> primary_type_bits) & (veclen - 1);
@@ -802,11 +846,18 @@ static void faslin(ptr tc, ptr *x, ptr t, ptr *pstrbuf, faslFile f) {
             *x = S_inexactnum(FLODAT(rp), FLODAT(ip));
             return;
         }
-        case fasl_type_string: {
+        case fasl_type_string:
+        case fasl_type_immutable_string: {
             iptr i, n; ptr str;
             n = uptrin(f);
             str = S_string((char *)0, n);
             for (i = 0; i != n; i += 1) Sstring_set(str, i, uptrin(f));
+            if (ty == fasl_type_immutable_string) {
+              if (n == 0)
+                str = NULLIMMUTABLESTRING(tc);
+              else
+                STRTYPE(str) |= string_immutable_flag;
+            }
             *x = str;
             return;
         }
@@ -828,6 +879,11 @@ static void faslin(ptr tc, ptr *x, ptr t, ptr *pstrbuf, faslFile f) {
             faslin(tc, &INITCAR(*x), t, pstrbuf, f);
             faslin(tc, &INITCDR(*x), t, pstrbuf, f);
             return;
+        case fasl_type_ephemeron:
+            *x = S_cons_in(space_ephemeron, 0, FIX(0), FIX(0));
+            faslin(tc, &INITCAR(*x), t, pstrbuf, f);
+            faslin(tc, &INITCDR(*x), t, pstrbuf, f);
+            return;
         case fasl_type_code: {
             iptr n, m, a; INT flags; iptr free;
             ptr co, reloc, name;
@@ -839,6 +895,7 @@ static void faslin(ptr tc, ptr *x, ptr t, ptr *pstrbuf, faslFile f) {
             faslin(tc, &name, t, pstrbuf, f);
             if (Sstringp(name)) name = SYMNAME(S_intern_sc(&STRIT(name, 0), Sstring_length(name), name));
             CODENAME(co) = name;
+            faslin(tc, &CODEARITYMASK(co), t, pstrbuf, f);
             faslin(tc, &CODEINFO(co), t, pstrbuf, f);
             faslin(tc, &CODEPINFOS(co), t, pstrbuf, f);
             bytesin((octet *)&CODEIT(co, 0), n, f);

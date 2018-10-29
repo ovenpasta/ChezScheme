@@ -1,6 +1,6 @@
 "5_4.ss"
 ;;; 5_4.ss
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -94,7 +94,7 @@
 (define-who string-copy!
   (lambda (s1 i1 s2 i2 k)
     (unless (string? s1) ($oops who "~s is not a string" s1))
-    (unless (string? s2) ($oops who "~s is not a string" s2))
+    (unless (mutable-string? s2) ($oops who "~s is not a mutable string" s2))
     (let ([n1 (string-length s1)] [n2 (string-length s2)])
       (unless (and (fixnum? i1) (fx>= i1 0))
         ($oops who "invalid start value ~s" i1))
@@ -109,19 +109,30 @@
     ; whew!
       (#3%string-copy! s1 i1 s2 i2 k))))
 
-(define substring-fill!
+(set-who! string->immutable-string
+  (lambda (v)
+    (cond
+      [(immutable-string? v) v]
+      [(eqv? v "") ($tc-field 'null-immutable-string ($tc))]
+      [else
+       (unless (string? v) ($oops who "~s is not a string" v))
+       (let ([v2 (string-copy v)])
+         ($string-set-immutable! v2)
+         v2)])))
+
+(define-who substring-fill!
    (lambda (s m n c)
-      (unless (string? s)
-         ($oops 'substring-fill! "~s is not a string" s))
+      (unless (mutable-string? s)
+         ($oops who "~s is not a mutable string" s))
       (unless (char? c)
-         ($oops 'substring-fill! "~s is not a character" c))
+         ($oops who "~s is not a character" c))
       (let ([k (string-length s)])
          (unless (and (fixnum? m) (fixnum? n) (fx<= 0 m n k))
-            ($oops 'substring-fill!
+            ($oops who
                    "~s and ~s are not valid start/end indices for ~s"
                    m n s))
          (do ([i m (fx+ i 1)])
-             ((fx= i n) s)
+             ((fx= i n))
              (string-set! s i c)))))
 
 (set! string-for-each

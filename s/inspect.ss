@@ -1,6 +1,6 @@
 "inspect.ss"
 ;;; inspect.ss
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -2148,6 +2148,7 @@
             [(get-code-sexpr x) => make-object]
             [else #f])]
         [source-path () (return-source (get-code-src x))]
+        [source-object () (get-code-src x)]
         [reloc () (make-object (get-reloc-objs x))]
         [size (g) (compute-size x g)]
         [write (p) (write x p)]
@@ -2157,12 +2158,12 @@
       (lambda (src)
         (include "types.ss")
         (if src
-            (let ([sfd (source-sfd src)] [fp (source-bfp src)])
-              (call-with-values
-                (lambda () ($locate-source sfd fp))
-                (case-lambda
-                  [() (values (source-file-descriptor-name sfd) fp)]
-                  [(path line char) (values path line char)])))
+            (call-with-values
+              (lambda () ((current-locate-source-object-source) src #t #f))
+              (case-lambda
+                [() (let ([sfd (source-sfd src)] [fp (source-bfp src)])
+                      (values (source-file-descriptor-name sfd) fp))]
+                [(path line char) (values path line char)]))
             (values))))
 
     (define-who make-continuation-object
@@ -2186,7 +2187,7 @@
               [len ($continuation-stack-length x)]
               [lpm ($continuation-return-livemask x)])
           (cond
-            [(and (code-info? info) (find-rpi offset (code-info-rpis info))) =>
+            [(and (code-info? info) (code-info-rpis info) (find-rpi offset (code-info-rpis info))) =>
              (lambda (rpi)
                (let ([cookie '(chocolate . chip)])
                  (let ([vals (make-vector len cookie)] [vars (make-vector len '())] [live (code-info-live info)])
@@ -2290,6 +2291,7 @@
           [eval (x) (frame-eval vars x)]
           [code () (make-object ($continuation-return-code x))]
           [source () (and sexpr (make-object sexpr))]
+          [source-object () src]
           [source-path () (return-source src)]
           [size (g) (compute-size x g)]
           [write (p) (write x p)]

@@ -1,5 +1,5 @@
 ;;; base-lang.ss
-;;; Copyright 1984-2016 Cisco Systems, Inc.
+;;; Copyright 1984-2017 Cisco Systems, Inc.
 ;;; 
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
@@ -155,7 +155,7 @@
 
   (define convention?
     (lambda (x)
-      (or (eq? x #f) (symbol? x))))
+      (symbol? x)))
 
   (define-record-type preinfo
     (nongenerative #{preinfo e23pkvo5btgapnzomqgegm-2})
@@ -184,7 +184,7 @@
 
   ; language of foreign types
   (define-language Ltype 
-    (nongenerative-id #{Ltype czp82kxwe75y4e18-0})
+    (nongenerative-id #{Ltype czp82kxwe75y4e18-1})
     (terminals
       (exact-integer (bits))
       ($ftd (ftd)))
@@ -199,7 +199,8 @@
       (fp-fixnum)
       (fp-double-float)
       (fp-single-float)
-      (fp-ftd ftd)))
+      (fp-ftd ftd)
+      (fp-ftd& ftd)))
 
   (define arity?
     (lambda (x)
@@ -210,7 +211,7 @@
 
   ; source language used by the passes leading up to the compiler or interpreter
   (define-language Lsrc
-    (nongenerative-id #{Lsrc czsa1fcfzdeh493n-2})
+    (nongenerative-id #{Lsrc czsa1fcfzdeh493n-3})
     (terminals
       (preinfo (preinfo))
       ($prelex (x))
@@ -247,8 +248,8 @@
       (record-ref rtd type index e)
       (record-set! rtd type index e1 e2)
       (cte-optimization-loc box e)
-      (foreign conv name e (arg-type* ...) result-type)
-      (fcallable conv e (arg-type* ...) result-type)
+      (foreign (conv* ...) name e (arg-type* ...) result-type)
+      (fcallable (conv* ...) e (arg-type* ...) result-type)
       (profile src)                                         => (profile)
       ; used only in cpvalid
       (cpvalid-defer e))

@@ -1,5 +1,5 @@
 /* version.h
- * Copyright 1984-2016 Cisco Systems, Inc.
+ * Copyright 1984-2017 Cisco Systems, Inc.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+#include "config.h"
 
 #if (machine_type == machine_type_arm32le || machine_type == machine_type_tarm32le || machine_type == machine_type_arm64le || machine_type == machine_type_tarm64le)
 #if (machine_type == machine_type_tarm32le || machine_type == machine_type_tarm64le)
@@ -34,7 +36,9 @@ typedef int tputsputcchar;
 #define LOCKF
 #define DIRMARKERP(c) ((c) == '/')
 #define FLUSHCACHE
+#ifndef DISABLE_X11
 #define LIBX11 "libX11.so"
+#endif
 #define LSEEK lseek64
 #define OFF_T off64_t
 #define _LARGEFILE64_SOURCE
@@ -67,7 +71,9 @@ typedef int tputsputcchar;
 #define LOCKF
 #define DIRMARKERP(c) ((c) == '/')
 #define FLUSHCACHE
+#ifndef DISABLE_X11
 #define LIBX11 "libX11.so"
+#endif
 #define LSEEK lseek64
 #define OFF_T off64_t
 #define _LARGEFILE64_SOURCE
@@ -100,7 +106,9 @@ typedef char *memcpy_t;
 typedef int tputsputcchar;
 #define LOCKF
 #define DIRMARKERP(c) ((c) == '/')
+#ifndef DISABLE_X11
 #define LIBX11 "libX11.so"
+#endif
 #define LSEEK lseek64
 #define OFF_T off64_t
 #define _LARGEFILE64_SOURCE
@@ -180,14 +188,16 @@ typedef char *memcpy_t;
 typedef int tputsputcchar;
 #define LOCKF
 #define DIRMARKERP(c) ((c) == '/')
+#ifndef DISABLE_X11
 #define LIBX11 "libX11.so"
+#endif
 #define SECATIME(sb) (sb).st_atimespec.tv_sec
 #define SECCTIME(sb) (sb).st_ctimespec.tv_sec
 #define SECMTIME(sb) (sb).st_mtimespec.tv_sec
 #define NSECATIME(sb) (sb).st_atimespec.tv_nsec
 #define NSECCTIME(sb) (sb).st_ctimespec.tv_nsec
 #define NSECMTIME(sb) (sb).st_mtimespec.tv_nsec
-#define ICONV_INBUF_TYPE const char **
+#define ICONV_INBUF_TYPE char **
 #define UNUSED __attribute__((__unused__))
 #endif
 
@@ -211,7 +221,9 @@ typedef char *memcpy_t;
 typedef int tputsputcchar;
 #define LOCKF
 #define DIRMARKERP(c) ((c) == '/')
+#ifndef DISABLE_X11
 #define LIBX11 "libX11.so"
+#endif
 #define SECATIME(sb) (sb).st_atimespec.tv_sec
 #define SECCTIME(sb) (sb).st_ctimespec.tv_sec
 #define SECMTIME(sb) (sb).st_mtimespec.tv_sec
@@ -258,7 +270,6 @@ typedef char *memcpy_t;
 #define LSTAT S_windows_stat64
 #define OFF_T __int64
 #define OPEN S_windows_open
-#define PUTENV _putenv
 #define READ _read
 #define RENAME S_windows_rename
 #define RMDIR S_windows_rmdir
@@ -296,7 +307,9 @@ typedef char *memcpy_t;
 typedef int tputsputcchar;
 #define LOCKF
 #define DIRMARKERP(c) ((c) == '/')
+#ifndef DISABLE_X11
 #define LIBX11 "libX11.so"
+#endif
 #define SECATIME(sb) (sb).st_atimespec.tv_sec
 #define SECCTIME(sb) (sb).st_ctimespec.tv_sec
 #define SECMTIME(sb) (sb).st_mtimespec.tv_sec
@@ -327,7 +340,9 @@ typedef char *memcpy_t;
 typedef int tputsputcchar;
 #define LOCKF
 #define DIRMARKERP(c) ((c) == '/')
+#ifndef DISABLE_X11
 #define LIBX11 "/usr/X11R6/lib/libX11.dylib"
+#endif
 #define _DARWIN_USE_64_BIT_INODE
 #define SECATIME(sb) (sb).st_atimespec.tv_sec
 #define SECCTIME(sb) (sb).st_ctimespec.tv_sec
@@ -394,7 +409,9 @@ typedef char *memcpy_t;
 typedef char tputsputcchar;
 #define LOCKF
 #define DIRMARKERP(c) ((c) == '/')
+#ifndef DISABLE_X11
 #define LIBX11 "libX11.so"
+#endif
 #define SECATIME(sb) (sb).st_atim.tv_sec
 #define SECCTIME(sb) (sb).st_ctim.tv_sec
 #define SECMTIME(sb) (sb).st_mtim.tv_sec
@@ -442,9 +459,6 @@ typedef char tputsputcchar;
 #endif
 #ifndef OPEN
 # define OPEN open
-#endif
-#ifndef PUTENV
-# define PUTENV putenv
 #endif
 #ifndef READ
 # define READ read
