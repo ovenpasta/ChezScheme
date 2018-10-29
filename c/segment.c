@@ -86,7 +86,7 @@ void S_freemem(void *addr, iptr bytes) {
 #endif
 
 #if defined(USE_VIRTUAL_ALLOC)
-#include <WinBase.h>
+#include <winbase.h>
 void *S_getmem(iptr bytes, IBOOL zerofill) {
   void *addr;
 

@@ -1313,7 +1313,7 @@ static double s_log1p(x) double x; { return log1p(x); }
 static ptr s_getenv PROTO((char *name));
 
 static ptr s_getenv(name) char *name; {
-#ifdef WIN32
+#if defined(WIN32) && !( defined(__GNUC__) && !defined(FEATURE_PTHREADS))
 #define GETENVBUFSIZ 100
   char buf[GETENVBUFSIZ];
   size_t n;

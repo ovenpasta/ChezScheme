@@ -18,9 +18,9 @@
 #include "equates.h"
 #ifdef FEATURE_WINDOWS
 
-#ifdef __GNUC__
-#define _WIN32_WINNT 0x0600  /// FOR MUTEX STUFF in synchapi.h
-#define WINVER 0x0600
+#ifdef __MINGW32__
+#define WINVER 0x0501 // Windows XP
+#define _WIN32_WINNT WINVER  /// FOR MUTEX STUFF in synchapi.h
 #endif
 
 #include <windows.h>
